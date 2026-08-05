@@ -1,0 +1,39 @@
+function r = create(status)
+%CREATE Build a structured result with all fields initialized.
+%   r = alias.result.create()       returns a 'success' result
+%   r = alias.result.create(status) returns a result with the given status
+%
+%   Status values: 'success', 'failed', 'rejected', 'cancelled'
+
+if nargin < 1
+    status = 'success';
+end
+
+r = struct();
+r.status = status;
+r.input = '';
+r.output = '';
+r.changed = false;
+
+r.alias_correction = struct( ...
+    'performed', false, ...
+    'detected_direction', '', ...
+    'translation_mm', 0);
+
+r.centering = struct( ...
+    'performed', false, ...
+    'shift_mm', 0);
+
+r.transform = eye(4);
+
+r.provenance = struct( ...
+    'version', '', ...
+    'matlab_release', '', ...
+    'spm_version', '', ...
+    'algorithm_id', '', ...
+    'validation_status', '');
+
+r.error = struct( ...
+    'identifier', '', ...
+    'message', '');
+end
