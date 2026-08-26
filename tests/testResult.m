@@ -1,5 +1,8 @@
 function tests = testResult
-%TESTRESULT Tests for result structure and provenance capture.
+%TESTRESULT Tests for the unified public result shape.
+%   Verifies: exactly four top-level fields (status, outputs, message, details),
+%   status vocabulary (success|partial|failed|cancelled, no rejected),
+%   details sub-fields, no shared state between results, and provenance capture.
 
 tests = functiontests(localfunctions);
 end
@@ -11,77 +14,170 @@ testCase.TestData.ProjectRoot = projectRoot;
 end
 
 
-function testCreateReturnsFullSchema(testCase)
-% GIVEN no special arguments
-% WHEN create() is called
-% THEN it returns a struct with all required scalar fields initialized
+%% --- Public result shape ---
+
+function testCreateReturnsExactFourFields(testCase)
+% GIVEN a default result
+% WHEN alias.result.create() is called
+% THEN it has exactly four top-level fields in order: status, outputs, message, details
 r = alias.result.create();
+fn = fieldnames(r);
+testCase.verifyEqual(numel(fn), 4, 'Result must have exactly 4 top-level fields');
+testCase.verifyEqual(fn{1}, 'status');
+testCase.verifyEqual(fn{2}, 'outputs');
+testCase.verifyEqual(fn{3}, 'message');
+testCase.verifyEqual(fn{4}, 'details');
+end
 
+function testCreateDefaultStatusIsSuccess(testCase)
+r = alias.result.create();
 testCase.verifyClass(r, 'struct');
-testCase.verifyTrue(ischar(r.status) && strcmp(r.status, 'success'));
-testCase.verifyTrue(ischar(r.input));
-testCase.verifyTrue(ischar(r.output));
-testCase.verifyTrue(islogical(r.changed) && ~r.changed);
-
-% Per-operation states
-testCase.verifyTrue(isfield(r, 'alias_correction'));
-testCase.verifyTrue(isstruct(r.alias_correction));
-testCase.verifyTrue(isfield(r.alias_correction, 'performed'));
-testCase.verifyFalse(r.alias_correction.performed);
-
-testCase.verifyTrue(isfield(r, 'centering'));
-testCase.verifyTrue(isstruct(r.centering));
-testCase.verifyTrue(isfield(r.centering, 'performed'));
-testCase.verifyFalse(r.centering.performed);
-
-% Transform and provenance
-testCase.verifyTrue(isfield(r, 'transform'));
-testCase.verifyEqual(r.transform, eye(4));
-
-testCase.verifyTrue(isfield(r, 'provenance'));
-testCase.verifyTrue(isstruct(r.provenance));
-
-% Error field
-testCase.verifyTrue(isfield(r, 'error'));
-testCase.verifyTrue(isstruct(r.error));
+testCase.verifyEqual(r.status, 'success');
+testCase.verifyEqual(r.outputs, {});
+testCase.verifyClass(r.message, 'char');
+testCase.verifyClass(r.details, 'struct');
 end
 
-function testCreateWithStatusProducesGivenStatus(testCase)
-% WHEN create('failed') is called
-% THEN the status field matches
-r = alias.result.create('failed');
+function testCreateWithMessage(testCase)
+r = alias.result.create('failed', 'Something went wrong.');
 testCase.verifyEqual(r.status, 'failed');
-
-r2 = alias.result.create('rejected');
-testCase.verifyEqual(r2.status, 'rejected');
-
-r3 = alias.result.create('cancelled');
-testCase.verifyEqual(r3.status, 'cancelled');
+testCase.verifyEqual(r.message, 'Something went wrong.');
 end
+
+function testStatusVocabularyOnly(testCase)
+% GIVEN the valid status vocabulary
+% WHEN creating results with each valid status
+% THEN each is accepted
+for s = {'success', 'partial', 'failed', 'cancelled'}
+    r = alias.result.create(s{1});
+    testCase.verifyEqual(r.status, s{1});
+end
+end
+
+function testInvalidStatusThrows(testCase)
+% GIVEN an invalid status string
+% WHEN create is called
+% THEN it throws alias:InvalidStatus
+testCase.verifyError(@() alias.result.create('rejected'), 'alias:InvalidStatus');
+testCase.verifyError(@() alias.result.create('unknown'), 'alias:InvalidStatus');
+end
+
+function testNoPublicRejected(testCase)
+% GIVEN the status vocabulary
+% WHEN 'rejected' is passed
+% THEN it throws — no public 'rejected'
+testCase.verifyError(@() alias.result.create('rejected'), 'alias:InvalidStatus');
+end
+
+
+%% --- Details sub-fields ---
+
+function testDetailsContainsAllRichFields(testCase)
+r = alias.result.create();
+d = r.details;
+
+% Input/output paths
+testCase.verifyTrue(isfield(d, 'input_path'));
+testCase.verifyTrue(isfield(d, 'output_path'));
+testCase.verifyTrue(isfield(d, 'changed'));
+testCase.verifyFalse(d.changed);
+
+% Operations (requested switches)
+testCase.verifyTrue(isfield(d, 'operations'));
+testCase.verifyTrue(isstruct(d.operations));
+testCase.verifyTrue(isfield(d.operations, 'AliasCorrection'));
+testCase.verifyFalse(d.operations.AliasCorrection);
+testCase.verifyTrue(isfield(d.operations, 'Centering'));
+testCase.verifyFalse(d.operations.Centering);
+
+% Per-operation engine outcomes
+testCase.verifyTrue(isfield(d, 'alias_correction'));
+testCase.verifyTrue(isstruct(d.alias_correction));
+testCase.verifyTrue(isfield(d.alias_correction, 'performed'));
+testCase.verifyFalse(d.alias_correction.performed);
+
+testCase.verifyTrue(isfield(d, 'centering'));
+testCase.verifyTrue(isstruct(d.centering));
+testCase.verifyTrue(isfield(d.centering, 'performed'));
+testCase.verifyFalse(d.centering.performed);
+
+% Transform
+testCase.verifyTrue(isfield(d, 'transform'));
+testCase.verifyTrue(isstruct(d.transform));
+testCase.verifyTrue(isfield(d.transform, 'applied'));
+testCase.verifyFalse(d.transform.applied);
+testCase.verifyTrue(isfield(d.transform, 'rotation'));
+testCase.verifyTrue(isfield(d.transform, 'translation'));
+testCase.verifyTrue(isfield(d.transform, 'scale'));
+
+% Provenance
+testCase.verifyTrue(isfield(d, 'provenance'));
+testCase.verifyTrue(isstruct(d.provenance));
+testCase.verifyTrue(isfield(d.provenance, 'spm_authority'));
+testCase.verifyTrue(isfield(d.provenance, 'spm_root'));
+testCase.verifyTrue(isfield(d.provenance, 'spm_version'));
+testCase.verifyTrue(isfield(d.provenance, 'spm_override_path'));
+testCase.verifyTrue(isfield(d.provenance, 'd2n_root'));
+
+% Failure
+testCase.verifyTrue(isfield(d, 'failure'));
+testCase.verifyTrue(isstruct(d.failure));
+testCase.verifyTrue(isfield(d.failure, 'identifier'));
+testCase.verifyTrue(isfield(d.failure, 'message'));
+testCase.verifyTrue(isfield(d.failure, 'stack'));
+testCase.verifyTrue(isfield(d.failure, 'cause'));
+end
+
+function testOutputsIsCellArray(testCase)
+r = alias.result.create();
+testCase.verifyClass(r.outputs, 'cell');
+testCase.verifyEqual(numel(r.outputs), 0, 'Default outputs must be empty cell');
+end
+
+function testOutputsContainsCommittedPathsOnly(testCase)
+r = alias.result.create('success');
+r.outputs = {'/some/output.nii'};
+testCase.verifyEqual(numel(r.outputs), 1);
+testCase.verifyEqual(r.outputs{1}, '/some/output.nii');
+end
+
+
+%% --- No shared state ---
 
 function testResultHasNoSharedReferences(testCase)
-% GIVEN two independent creates
-% WHEN one is mutated
-% THEN the other is unchanged
 a = alias.result.create();
 b = alias.result.create();
-
 a.status = 'cancelled';
-a.changed = true;
-a.alias_correction.performed = true;
-
+a.details.changed = true;
+a.details.operations.AliasCorrection = true;
+a.details.alias_correction.performed = true;
+a.outputs = {'/a.nii'};
 testCase.verifyEqual(b.status, 'success');
-testCase.verifyFalse(b.changed);
-testCase.verifyFalse(b.alias_correction.performed);
+testCase.verifyFalse(b.details.changed);
+testCase.verifyFalse(b.details.operations.AliasCorrection);
+testCase.verifyFalse(b.details.alias_correction.performed);
+testCase.verifyEqual(b.outputs, {});
 end
 
-function testProvenanceCaptureReturnsRequiredFields(testCase)
-% GIVEN a project root
-% WHEN capture() is called
-% THEN it returns a struct with version, matlab_release, spm_version,
-%      algorithm_id, and validation_status
-p = alias.provenance.capture('SPM12 (7771)', testCase.TestData.ProjectRoot);
 
+%% --- Failure metadata ---
+
+function testFailureMetadataFields(testCase)
+r = alias.result.create('failed', 'Config error.');
+r.details.failure.identifier = 'alias:ConfigInvalid';
+r.details.failure.message = 'spm_root missing';
+r.details.failure.stack = 'stack trace here';
+r.details.failure.cause = '';
+testCase.verifyEqual(r.details.failure.identifier, 'alias:ConfigInvalid');
+testCase.verifyEqual(r.details.failure.message, 'spm_root missing');
+testCase.verifyEqual(r.details.failure.stack, 'stack trace here');
+end
+
+
+%% --- Provenance capture (unchanged) ---
+
+function testProvenanceCaptureReturnsRequiredFields(testCase)
+p = alias.provenance.capture('SPM12 (7771)', testCase.TestData.ProjectRoot);
 testCase.verifyClass(p, 'struct');
 testCase.verifyTrue(isfield(p, 'version'));
 testCase.verifyTrue(~isempty(p.version));
@@ -89,16 +185,28 @@ testCase.verifyTrue(isfield(p, 'matlab_release'));
 testCase.verifyTrue(~isempty(p.matlab_release));
 testCase.verifyTrue(isfield(p, 'spm_version'));
 testCase.verifyEqual(p.spm_version, 'SPM12 (7771)');
+testCase.verifyTrue(isfield(p, 'spm_authority'));
+testCase.verifyTrue(isfield(p, 'spm_root'));
 testCase.verifyTrue(isfield(p, 'algorithm_id'));
 testCase.verifyTrue(~isempty(p.algorithm_id));
 testCase.verifyTrue(isfield(p, 'validation_status'));
 testCase.verifyEqual(p.validation_status, 'unvalidated');
 end
 
+function testProvenanceSpfInfoFieldsPopulated(testCase)
+spmInfo = struct('spm_root', '/fake/spm/root', ...
+                 'spm_authority', 'fallback', ...
+                 'spm_version', 'SPM8', ...
+                 'spm_override_path', '');
+config = struct('d2n_root', '/fake/d2n/root');
+p = alias.provenance.capture('SPM8', testCase.TestData.ProjectRoot, spmInfo, config);
+testCase.verifyEqual(p.spm_root, '/fake/spm/root');
+testCase.verifyEqual(p.spm_authority, 'fallback');
+testCase.verifyEqual(p.d2n_root, '/fake/d2n/root');
+testCase.verifyTrue(isempty(p.spm_override_path));
+end
+
 function testProvenanceVersionReadsVersionFile(testCase)
-% GIVEN a temporary VERSION file in the project root
-% WHEN capture() is called
-% THEN version matches the file content
 tmpProject = fullfile(tempdir, 'fake_proj_version');
 if exist(tmpProject, 'dir') == 7, rmdir(tmpProject, 's'); end
 mkdir(tmpProject);
@@ -106,7 +214,6 @@ fid = fopen(fullfile(tmpProject, 'VERSION'), 'w');
 fprintf(fid, '0.2.0-alpha');
 fclose(fid);
 cleanup = onCleanup(@() rmdir(tmpProject, 's'));
-
 p = alias.provenance.capture('SPM12', tmpProject);
 testCase.verifyEqual(p.version, '0.2.0-alpha');
 end

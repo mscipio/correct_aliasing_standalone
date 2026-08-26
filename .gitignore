@@ -1,0 +1,35 @@
+# MATLAB generated files
+*.asv
+*.m~
+*.mex*
+*.mlappinstall
+*.mltbx
+codegen/
+slprj/
+
+# MATLAB code generation
+sccprj/
+
+# Compiled binaries
+*.o
+*.obj
+*.dll
+*.exe
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Local CodeGraph index
+.codegraph/
+
+# Local agent tooling index
+.atl/
+
+# Local plan/task state
+.aria/

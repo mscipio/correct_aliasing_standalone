@@ -14,10 +14,11 @@ cleanup = onCleanup(@() restoreSession(originalPath, originalDir));
 addpath(rootDir, '-begin');
 
 if nargin == 0
-    % GUI mode
-    alias.gui.mainWindow();
+    % GUI mode — return the GUI result when requested, never []
     if nargout > 0
-        varargout{1} = [];
+        varargout{1} = alias.gui.mainWindow();
+    else
+        alias.gui.mainWindow();
     end
     return;
 end
@@ -33,9 +34,11 @@ p.addParameter('Overwrite', false, @(x) islogical(x) || (isnumeric(x) && isscala
 try
     p.parse(varargin{:});
 catch ME
-    result = alias.result.create('failed');
-    result.error.identifier = 'alias:InvalidArguments';
-    result.error.message = ME.message;
+    result = alias.result.create('failed', 'Invalid arguments.');
+    result.details.failure.identifier = 'alias:InvalidArguments';
+    result.details.failure.message = ME.message;
+    % Preserve any supplied positional paths in normalized form
+    [result.details.input_path, result.details.output_path] = extractPaths(varargin);
     if nargout > 0, varargout{1} = result; end
     return;
 end
@@ -57,4 +60,26 @@ path(originalPath);
 if exist(originalDir, 'dir') == 7
     cd(originalDir);
 end
+end
+
+function [inPath, outPath] = extractPaths(args)
+% Pull the first two positional args if they look like paths.
+inPath = ''; outPath = '';
+if numel(args) >= 1 && ischar(args{1})
+    inPath = normalize(args{1});
+end
+if numel(args) >= 2 && ischar(args{2})
+    outPath = normalize(args{2});
+end
+end
+
+function p = normalize(p)
+if isempty(p), return; end
+p = strtrim(p);
+if isunix && p(1) == '~'
+    p = fullfile(getenv('HOME'), p(2:end));
+end
+if isunix && p(1) == '/', return; end
+if ispc && length(p) >= 2 && p(2) == ':', return; end
+p = fullfile(pwd, p);
 end

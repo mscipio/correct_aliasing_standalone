@@ -1,79 +1,201 @@
-function result = run(inputPath, outputPath, doAlias, doCenter, doOverwrite)
-%RUN Non-interactive alias correction and centering.
+function result = run(inputPath, outputPath, doAlias, doCenter, doOverwrite, options)
+%RUN Alias correction and centering with optional preview/decision seam.
 %   result = alias.api.run(inputPath, outputPath, doAlias, doCenter, doOverwrite)
+%   result = alias.api.run(inputPath, outputPath, doAlias, doCenter, doOverwrite, options)
 %
 %   This function never creates UI. The source file is never modified.
 %
+%   Every accepted input type (file or directory) is passed through the
+%   verified public dicom2nifti contract (dicom2nifti.api.run) via
+%   alias.api.loadInput. SPM reads only the dependency-produced NIfTI.
+%
+%   This function snapshots and restores the full MATLAB path and CWD on
+%   every return and exception path, including direct calls (not only
+%   through the correct_aliasing facade).
+%
 %   Input:
-%     inputPath   — path to NIfTI or DICOM file
+%     inputPath   — path to any accepted input source (file or directory)
 %     outputPath  — path for corrected output (NIfTI)
 %     doAlias     — logical, perform alias correction
 %     doCenter    — logical, perform centering
 %     doOverwrite — logical, allow overwriting existing output
+%     options     — (optional) struct with optional fields:
+%       .previewFcn — function handle @(ctx) decision
+%         ctx    — struct with fields:
+%           originalVolData, originalAffine,
+%           processedVolData, processedAffine,
+%           engineResult, inputPath, outputPath
+%         decision — char: 'accept', 'reject', or 'cancel'
+%         If omitted or empty, the API writes without asking.
+%         If provided, the API calls it exactly once after engine
+%         execution. On 'reject' or 'cancel': cancelled, no write.
+%         On 'accept': one staged write + safePromote.
+%         If the callback throws or returns an invalid decision,
+%         the result is 'failed' with diagnostics and no write.
 %
 %   Output:
-%     result      — struct per the result schema
+%     result      — scalar struct with exactly four top-level fields:
+%                   status, outputs, message, details
+
+% -------------------------------------------------------------------------
+% 0. Snapshot caller path/CWD — restored on every return and exception
+% -------------------------------------------------------------------------
+originalPath = path;
+originalDir = pwd;
+sessionCleanup = onCleanup(@() restoreSession(originalPath, originalDir));
 
 rootDir = fileparts(fileparts(fileparts(mfilename('fullpath'))));
 result = alias.result.create('failed');
-result.input = inputPath;
-result.provenance = alias.provenance.capture('unknown', rootDir);
+% Preserve caller intent in operations switches on all exit paths
+result.details.operations.AliasCorrection = doAlias;
+result.details.operations.Centering = doCenter;
 
-% --- Early validation ---
+% --- Parse optional preview/decision seam ---
+previewFcn = [];
+if nargin >= 6 && ~isempty(options)
+    if isstruct(options) && isfield(options, 'previewFcn')
+        previewFcn = options.previewFcn;
+    end
+end
+
+% --- Early validation (with path normalization) ---
 if ~ischar(inputPath) || isempty(strtrim(inputPath))
-    result.error.identifier = 'alias:InvalidInputPath';
-    result.error.message = 'Input path must be a nonempty character vector.';
+    result.details.failure.identifier = 'alias:InvalidInputPath';
+    result.details.failure.message = 'Input path must be a nonempty character vector.';
+    result.message = 'Invalid input path.';
     return;
 end
 inputPath = absolutePath(strtrim(inputPath));
+result.details.input_path = inputPath;
 
 if ~ischar(outputPath) || isempty(strtrim(outputPath))
-    result.error.identifier = 'alias:InvalidOutputPath';
-    result.error.message = 'Output path must be a nonempty character vector.';
+    result.details.failure.identifier = 'alias:InvalidOutputPath';
+    result.details.failure.message = 'Output path must be a nonempty character vector.';
+    result.message = 'Invalid output path.';
     return;
 end
 outputPath = absolutePath(strtrim(outputPath));
+result.details.output_path = outputPath;
 
-if exist(inputPath, 'file') ~= 2
-    result.error.identifier = 'alias:InputNotFound';
-    result.error.message = sprintf('Input file does not exist: %s', inputPath);
+% Accept existing file OR directory — converter handles both uniformly
+inputExistsAsFile = (exist(inputPath, 'file') == 2);
+inputExistsAsDir  = (exist(inputPath, 'dir')  == 7);
+if ~inputExistsAsFile && ~inputExistsAsDir
+    result.details.failure.identifier = 'alias:InputNotFound';
+    result.details.failure.message = sprintf('Input does not exist: %s', inputPath);
+    result.message = 'Input not found.';
     return;
 end
 
-if sameFile(inputPath, outputPath)
-    result.error.identifier = 'alias:InputOutputSame';
-    result.error.message = 'Input and output are the same file. The source will not be modified.';
+if alias.util.sameCanonicalPath(inputPath, outputPath)
+    result.details.failure.identifier = 'alias:InputOutputSame';
+    result.details.failure.message = 'Input and output are the same file. The source will not be modified.';
+    result.message = 'Input and output must differ.';
     return;
 end
 
 if ~doOverwrite && exist(outputPath, 'file') == 2
-    result.error.identifier = 'alias:OutputExists';
-    result.error.message = sprintf( ...
+    result.details.failure.identifier = 'alias:OutputExists';
+    result.details.failure.message = sprintf( ...
         'Output already exists and Overwrite is false: %s', outputPath);
+    result.message = 'Output exists and Overwrite is false.';
     return;
 end
 
-% --- SPM preflight ---
-config = alias_config();
+% --- Load and validate config (scoped, path/CWD-safe) ---
+try
+    config = alias.config.load();
+    config = alias.config.validate(config);
+catch ME
+    result = populateFailure(result, ME);
+    result.message = 'Configuration validation failed.';
+    return;
+end
+
+% --- SPM preflight (leaves selected SPM + override on path) ---
 try
     spmInfo = alias.spm.preflight(config);
 catch ME
-    result.error.identifier = strrep(ME.identifier, 'alias:', 'alias:Spm');
-    result.error.message = ME.message;
+    result = populateFailure(result, ME);
+    result.message = 'SPM preflight failed.';
     return;
 end
 
-% Add SPM to path for processing
-spmCleanup = onCleanup(@() path(path));
+provenance = alias.provenance.capture(spmInfo.spm_version, rootDir, spmInfo, config);
+result.details.provenance = provenance;
 
-addpath(config.spm_root, '-begin');
-result.provenance.spm_version = spmInfo.spm_version;
+% --- Convert input via the public dicom2nifti contract ---
+convertCleanup = [];
+converterResult = struct();
+try
+    [niiPath, convertCleanup, converterResult] = alias.api.loadInput(inputPath, config);
+catch ME
+    % Structural error (converter missing/shadowed) — loadInput threw
+    result = populateFailure(result, ME);
+    result.message = 'Input conversion failed.';
+    if ~isempty(converterResult)
+        result.details.converter = converterResult;
+    end
+    return;
+end
 
-% --- Load input (NIfTI or DICOM) ---
-[volData, affine, hdr] = loadInput(inputPath);
+% Preserve full converter diagnostics under details (transient path never in outputs)
+result.details.converter_processing_path = niiPath;
+result.details.converter = converterResult;
+
+% Handle converter failed/cancelled — no output to process
+if isfield(converterResult, 'status') && ...
+   (strcmp(converterResult.status, 'failed') || strcmp(converterResult.status, 'cancelled'))
+    clear convertCleanup;
+    result.status = 'failed';
+    result.details.failure.identifier = 'alias:ConverterFailed';
+    if isfield(converterResult, 'message')
+        result.details.failure.message = converterResult.message;
+    else
+        result.details.failure.message = sprintf('Converter returned status ''%s''.', converterResult.status);
+    end
+    result.details.failure.stack = '';
+    result.details.failure.cause = '';
+    result.message = 'Input conversion failed.';
+    return;
+end
+
+% Handle converter partial — only proceed if output was actually produced
+if isfield(converterResult, 'status') && strcmp(converterResult.status, 'partial')
+    if isempty(niiPath)
+        clear convertCleanup;
+        result.status = 'failed';
+        result.details.failure.identifier = 'alias:ConverterPartial';
+        result.details.failure.message = 'Converter returned partial without producing output.';
+        result.details.failure.stack = '';
+        result.details.failure.cause = '';
+        result.message = 'Input conversion produced no usable output.';
+        return;
+    end
+    % Partial with output: continue processing; final status may be partial
+    % only after correction output is committed.
+end
+
+% --- SPM read the dependency-produced NIfTI ---
+try
+    V = spm_vol(niiPath);
+    volData = spm_read_vols(V);
+    affine = V.mat;
+catch ME
+    clear convertCleanup;
+    result = populateFailure(result, ME);
+    result.details.failure.identifier = 'alias:LoadFailed';
+    result.message = 'Failed to load converted volume.';
+    return;
+end
+
+% Release the converter temp workspace — data is in memory
+clear convertCleanup;
+
 if isempty(volData)
-    result.error.identifier = 'alias:LoadFailed';
-    result.error.message = 'Failed to load input volume.';
+    result.details.failure.identifier = 'alias:LoadFailed';
+    result.details.failure.message = 'Converted volume is empty.';
+    result.message = 'Input loading failed.';
     return;
 end
 
@@ -81,116 +203,119 @@ end
 ops = struct('AliasCorrection', doAlias, 'Centering', doCenter);
 engResult = alias.core.engine(volData, affine, ops);
 
-% --- Write output ---
-tempOutput = [outputPath '.tmp_' generateToken() '.nii'];
-try
-    writeVolume(tempOutput, engResult.volData, engResult.affine, hdr);
-    % Atomic promotion
-    if doOverwrite && exist(outputPath, 'file') == 2
-        delete(outputPath);
-    end
-    [ok, msg] = movefile(tempOutput, outputPath, 'f');
-    if ~ok
-        result.error.identifier = 'alias:WriteFailed';
-        result.error.message = sprintf('Could not promote output: %s', msg);
+% --- Optional preview/decision seam ---
+if ~isempty(previewFcn)
+    ctx = struct();
+    ctx.originalVolData = volData;
+    ctx.originalAffine = affine;
+    ctx.processedVolData = engResult.volData;
+    ctx.processedAffine = engResult.affine;
+    ctx.engineResult = engResult;
+    ctx.inputPath = inputPath;
+    ctx.outputPath = outputPath;
+
+    decision = '';
+    try
+        decision = previewFcn(ctx);
+    catch ME
+        % Callback threw — produce structured failed result, no write
+        result.status = 'failed';
+        result = populateFailure(result, ME);
+        result.details.failure.identifier = 'alias:PreviewCallbackFailed';
+        result.message = 'Preview callback threw an exception.';
+        result.details.input_path = inputPath;
+        result.details.output_path = outputPath;
+        result.details.operations.AliasCorrection = doAlias;
+        result.details.operations.Centering = doCenter;
         return;
     end
+
+    % Validate the decision: must be a char vector, one of accept/reject/cancel
+    if ~ischar(decision) || isempty(decision) || ...
+       ~(strcmp(decision, 'accept') || strcmp(decision, 'reject') || strcmp(decision, 'cancel'))
+        result.status = 'failed';
+        result.details.failure.identifier = 'alias:PreviewDecisionInvalid';
+        if ischar(decision)
+            result.details.failure.message = sprintf( ...
+                'Preview callback returned unrecognized decision: ''%s''. Valid: accept, reject, cancel.', decision);
+        else
+            result.details.failure.message = sprintf( ...
+                'Preview callback returned a non-char decision of class %s. Valid: accept, reject, cancel.', class(decision));
+        end
+        result.details.failure.stack = '';
+        result.details.failure.cause = '';
+        result.message = 'Preview callback returned an invalid decision.';
+        result.details.input_path = inputPath;
+        result.details.output_path = outputPath;
+        result.details.operations.AliasCorrection = doAlias;
+        result.details.operations.Centering = doCenter;
+        return;
+    end
+
+    if ~strcmp(decision, 'accept')
+        % Operator rejected or cancelled — no write
+        result.status = 'cancelled';
+        if strcmp(decision, 'reject')
+            result.message = 'Operator rejected the correction.';
+        else
+            result.message = 'Operator cancelled.';
+        end
+        result.details.input_path = inputPath;
+        result.details.output_path = outputPath;
+        result.details.operations.AliasCorrection = doAlias;
+        result.details.operations.Centering = doCenter;
+        return;
+    end
+end
+
+% --- Write staged corrected output via SPM, then promote ---
+tempOutput = [outputPath '.tmp_' generateToken() '.nii'];
+try
+    writeVolume(tempOutput, engResult.volData, engResult.affine, V);
+    alias.util.safePromote(tempOutput, outputPath);
 catch ME
-    result.error.identifier = 'alias:WriteFailed';
-    result.error.message = ME.message;
+    result = populateFailure(result, ME);
+    result.details.failure.identifier = 'alias:WriteFailed';
+    result.message = 'Output write failed.';
     if exist(tempOutput, 'file') == 2
         delete(tempOutput);
     end
     return;
 end
 
-% --- Build success result ---
-result.status = 'success';
-result.output = outputPath;
-result.changed = engResult.alias_corrected || engResult.centered;
-
-if engResult.alias_corrected
-    result.alias_correction.performed = true;
-    result.alias_correction.translation_mm = engResult.translation_mm;
-end
-if engResult.centered
-    result.centering.performed = true;
-    result.centering.shift_mm = engResult.shift_mm;
-end
-
-result.transform = engResult.affine;
-result.error = struct('identifier', '', 'message', '');
-end
-
-
-function [volData, affine, hdr] = loadInput(inputPath)
-% Load input volume, routing NIfTI directly and DICOM through SPM conversion.
-if isNiftiExt(inputPath)
-    [volData, affine, hdr] = loadVolume(inputPath);
-elseif isDicomExt(inputPath)
-    [volData, affine, hdr] = loadDicom(inputPath);
+% --- Build result (success or partial if upstream converter was partial) ---
+upstreamPartial = isfield(converterResult, 'status') && strcmp(converterResult.status, 'partial');
+if upstreamPartial
+    result.status = 'partial';
+    result.message = 'Correction completed from partial converter output.';
 else
-    % Unknown type: try NIfTI first, then DICOM
-    [volData, affine, hdr] = loadVolume(inputPath);
-    if isempty(volData)
-        [volData, affine, hdr] = loadDicom(inputPath);
-    end
+    result.status = 'success';
+    result.message = 'Correction completed.';
 end
-end
+result.details.input_path = inputPath;
+result.details.output_path = outputPath;
+result.details.changed = engResult.alias_corrected || engResult.centered;
+result.outputs = {outputPath};
 
+% operations: requested switches per spec
+result.details.operations.AliasCorrection = doAlias;
+result.details.operations.Centering = doCenter;
 
-function [volData, affine, hdr] = loadVolume(inputPath)
-% Load a NIfTI volume using SPM spm_vol/spm_read_vols.
-try
-    V = spm_vol(inputPath);
-    volData = spm_read_vols(V);
-    affine = V.mat;
-    hdr = V;
-catch ME
-    warning('alias:LoadWarning', 'spm_vol failed for %s: %s', inputPath, ME.message);
-    volData = [];
-    affine = [];
-    hdr = [];
-end
-end
+% Per-operation engine outcomes
+result.details.alias_correction.performed = engResult.alias_corrected;
+result.details.centering.performed = engResult.centered;
 
+result.details.transform = struct( ...
+    'applied', result.details.changed, ...
+    'rotation', 0, ...
+    'translation', max(abs(engResult.translation_mm), abs(engResult.shift_mm)), ...
+    'scale', 1);
 
-function [volData, affine, hdr] = loadDicom(inputPath)
-% Load a DICOM file using SPM spm_dicom_headers/spm_dicom_convert.
-% Converts to temp NIfTI, then loads the result.
-tmpDir = fullfile(tempdir, ['alias_dicom_' generateToken()]);
-if exist(tmpDir, 'dir') == 7, rmdir(tmpDir, 's'); end
-mkdir(tmpDir);
-cleanup = onCleanup(@() rmdir(tmpDir, 's'));
-outputDir = tmpDir;
-
-try
-    hdrs = spm_dicom_headers(inputPath);
-    if isempty(hdrs)
-        volData = []; affine = []; hdr = [];
-        return;
-    end
-    out = spm_dicom_convert(hdrs, 'all', 'flat', 'nii', outputDir);
-    % Find the produced NIfTI file
-    listing = dir(fullfile(outputDir, '*.nii'));
-    if isempty(listing)
-        volData = []; affine = []; hdr = [];
-        return;
-    end
-    convertedPath = fullfile(outputDir, listing(1).name);
-    [volData, affine, hdr] = loadVolume(convertedPath);
-catch ME
-    warning('alias:DicomWarning', 'spm_dicom_convert failed: %s', ME.message);
-    volData = [];
-    affine = [];
-    hdr = [];
-end
+result.details.failure = struct('identifier', '', 'message', '', 'stack', '', 'cause', '');
 end
 
 
 function writeVolume(outputPath, volData, affine, hdr)
-% Write a NIfTI volume using SPM with temp-staged atomic promote.
-% The caller handles the staging and promotion to keep the API contract.
 hdr.fname = outputPath;
 hdr.mat = affine;
 hdr = spm_create_vol(hdr);
@@ -199,63 +324,59 @@ end
 
 
 function token = generateToken()
-% Generate a short random token for temp file naming.
-token = char(randi([97 122], 1, 8));  % 8 random lowercase letters
+token = char(randi([97 122], 1, 8));
 end
 
 
 function pathValue = absolutePath(pathValue)
-% Resolve relative paths to absolute.
+% Resolve to an absolute path. Bare names and relative paths (./ , ../ ,
+% nested) become absolute via pwd. Already-absolute paths are unchanged.
 if isempty(pathValue), return; end
 if isunix && pathValue(1) == '~'
     pathValue = fullfile(getenv('HOME'), pathValue(2:end));
 end
-if isempty(fileparts(pathValue))
-    pathValue = fullfile(pwd, pathValue);
+if isunix && pathValue(1) == '/'
+    return;  % already absolute
 end
+if ispc && length(pathValue) >= 2 && pathValue(2) == ':'
+    return;  % already absolute (drive letter)
+end
+pathValue = fullfile(pwd, pathValue);
 end
 
 
-function result = sameFile(first, second)
-% Cross-platform same-file comparison.
-if ispc
-    result = strcmpi(first, second);
+function result = populateFailure(result, ME)
+% Populate the full failure metadata from a caught MException.
+result.details.failure.identifier = ME.identifier;
+result.details.failure.message = ME.message;
+% Stack: serialize the MException stack array to a readable string
+if isfield(ME, 'stack') && ~isempty(ME.stack)
+    stackLines = cell(1, numel(ME.stack));
+    for k = 1:numel(ME.stack)
+        stackLines{k} = sprintf('  %s (line %d, file %s)', ...
+            ME.stack(k).name, ME.stack(k).line, ME.stack(k).file);
+    end
+    result.details.failure.stack = strjoin(stackLines, newline);
 else
-    result = strcmp(first, second);
+    result.details.failure.stack = '';
 end
-end
-
-
-function result = isNiftiExt(filePath)
-% Check if file has a NIfTI extension (.nii or .nii.gz).
-[~, ~, ext] = fileparts(filePath);
-result = strcmpi(ext, '.nii');
-if ~result && length(filePath) > 7
-    result = strcmpi(filePath(end-6:end), '.nii.gz');
-end
-end
-
-
-function result = isDicomExt(filePath)
-% Check if file has a DICOM extension (.dcm or .ima).
-[~, ~, ext] = fileparts(filePath);
-result = any(strcmpi(ext, {'.dcm', '.ima'}));
-end
-
-
-function config = alias_config()
-% Load deployer configuration for the standalone application.
-% We resolve the path relative to +alias/+api/run.m location.
-apiDir = fileparts(mfilename('fullpath'));
-projectRoot = fileparts(fileparts(apiDir));
-configPath = fullfile(projectRoot, 'config', 'defaults.m');
-if exist(configPath, 'file') == 2
-    oldPath = path;
-    restore = onCleanup(@() path(oldPath));
-    configDir = fullfile(projectRoot, 'config');
-    addpath(configDir, '-begin');
-    config = defaults();
+% Cause: chain of causing exceptions
+if isfield(ME, 'cause') && ~isempty(ME.cause)
+    causeLines = cell(1, numel(ME.cause));
+    for k = 1:numel(ME.cause)
+        causeLines{k} = sprintf('  %s: %s', ...
+            ME.cause{k}.identifier, ME.cause{k}.message);
+    end
+    result.details.failure.cause = strjoin(causeLines, newline);
 else
-    config = struct('spm_root', '', 'log_level', 'info');
+    result.details.failure.cause = '';
+end
+end
+
+
+function restoreSession(originalPath, originalDir)
+path(originalPath);
+if exist(originalDir, 'dir') == 7
+    cd(originalDir);
 end
 end
