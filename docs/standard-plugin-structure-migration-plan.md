@@ -1,15 +1,14 @@
 # correct_aliasing Standard Plugin Structure Migration Plan
 
 correct_aliasing is migration step 3. Its current package is closest to the
-target, but the working tree is active development at `0.1.0-dev`; migration
+target, but the working tree is active development at `0.2.0`; migration
 builds on those bytes without conflating structural alignment with release
 readiness.
 
 ## Status
 
 **Migration implemented (T001–T008 complete).** All structural changes and
-documentation reconciliation are in place. `VERSION` remains `0.1.0-dev`
-pending standalone contract stabilization. No release tag has been created.
+documentation reconciliation are in place. `VERSION` is `0.2.0`.
 
 ## Objective and Prerequisite
 
@@ -80,7 +79,7 @@ Non-goals:
    exception-to-failed mapping; full converter diagnostics; partial-only-after-commit.
 8. **Documentation reconciliation:** ✅ CHANGELOG, README, migration plan, and
    dependency contract updated to reflect implemented behavior. `VERSION` remains
-   `0.1.0-dev` (development release; no tag created).
+   `0.2.0`.
 
 ## Compatibility Strategy
 
@@ -128,8 +127,7 @@ Full suite: **141 passed, 0 failed**.
 - ✅ Preview callback validation: exceptions and invalid decisions produce
   structured `failed` results.
 - ✅ README, CHANGELOG, migration plan, and dependency contract document the
-  migration accurately. `VERSION` is `0.1.0-dev` (development release; no tag
-  created).
+   migration accurately. `VERSION` is `0.2.0`.
 
 ## Resolved Decisions
 
@@ -151,8 +149,7 @@ Full suite: **141 passed, 0 failed**.
 - Existing expected failures mostly return results while unexpected engine
   failures may throw; the boundary distinguishes normal processing from
   broken internal invariants.
-- The repository is at `0.1.0-dev`; release tag deferred until standalone
-  contract is stabilized.
+- The repository is at `0.2.0`.
 
 ## Relevant Files and Symbols
 

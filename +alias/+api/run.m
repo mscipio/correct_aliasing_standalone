@@ -154,8 +154,18 @@ if isfield(converterResult, 'status') && ...
     else
         result.details.failure.message = sprintf('Converter returned status ''%s''.', converterResult.status);
     end
-    result.details.failure.stack = '';
-    result.details.failure.cause = '';
+    % Preserve converter failure diagnostics (stack/cause) if available
+    if isfield(converterResult, 'details') && isstruct(converterResult.details) && ...
+       isfield(converterResult.details, 'failure') && isstruct(converterResult.details.failure)
+        cf = converterResult.details.failure;
+        if isfield(cf, 'stack'), result.details.failure.stack = cf.stack;
+        else, result.details.failure.stack = struct('file',{},'name',{},'line',{}); end
+        if isfield(cf, 'cause'), result.details.failure.cause = cf.cause;
+        else, result.details.failure.cause = {}; end
+    else
+        result.details.failure.stack = struct('file',{},'name',{},'line',{});
+        result.details.failure.cause = {};
+    end
     result.message = 'Input conversion failed.';
     return;
 end
@@ -167,8 +177,8 @@ if isfield(converterResult, 'status') && strcmp(converterResult.status, 'partial
         result.status = 'failed';
         result.details.failure.identifier = 'alias:ConverterPartial';
         result.details.failure.message = 'Converter returned partial without producing output.';
-        result.details.failure.stack = '';
-        result.details.failure.cause = '';
+        result.details.failure.stack = struct('file',{},'name',{},'line',{});
+        result.details.failure.cause = {};
         result.message = 'Input conversion produced no usable output.';
         return;
     end
@@ -242,8 +252,8 @@ if ~isempty(previewFcn)
             result.details.failure.message = sprintf( ...
                 'Preview callback returned a non-char decision of class %s. Valid: accept, reject, cancel.', class(decision));
         end
-        result.details.failure.stack = '';
-        result.details.failure.cause = '';
+        result.details.failure.stack = struct('file',{},'name',{},'line',{});
+        result.details.failure.cause = {};
         result.message = 'Preview callback returned an invalid decision.';
         result.details.input_path = inputPath;
         result.details.output_path = outputPath;
@@ -347,29 +357,48 @@ end
 
 function result = populateFailure(result, ME)
 % Populate the full failure metadata from a caught MException.
+%   Stack is preserved as a struct array with fields file/name/line.
+%   Cause is preserved as a cell array of structs (recursive).
+%   MException is an object — access .stack and .cause directly (no isfield).
 result.details.failure.identifier = ME.identifier;
 result.details.failure.message = ME.message;
-% Stack: serialize the MException stack array to a readable string
-if isfield(ME, 'stack') && ~isempty(ME.stack)
-    stackLines = cell(1, numel(ME.stack));
-    for k = 1:numel(ME.stack)
-        stackLines{k} = sprintf('  %s (line %d, file %s)', ...
-            ME.stack(k).name, ME.stack(k).line, ME.stack(k).file);
-    end
-    result.details.failure.stack = strjoin(stackLines, newline);
-else
-    result.details.failure.stack = '';
+% Stack: preserve as struct array with file/name/line
+result.details.failure.stack = serializeStack(ME.stack);
+% Cause: preserve as cell array of structs (recursive)
+result.details.failure.cause = serializeCause(ME.cause);
 end
-% Cause: chain of causing exceptions
-if isfield(ME, 'cause') && ~isempty(ME.cause)
-    causeLines = cell(1, numel(ME.cause));
-    for k = 1:numel(ME.cause)
-        causeLines{k} = sprintf('  %s: %s', ...
-            ME.cause{k}.identifier, ME.cause{k}.message);
-    end
-    result.details.failure.cause = strjoin(causeLines, newline);
+
+
+function s = serializeStack(stackArr)
+% Serialize an MException.stack array into a struct array with file/name/line.
+if isempty(stackArr)
+    s = struct('file', {}, 'name', {}, 'line', {});
 else
-    result.details.failure.cause = '';
+    s = struct('file', {}, 'name', {}, 'line', {});
+    for k = 1:numel(stackArr)
+        s(k).file = stackArr(k).file;
+        s(k).name = stackArr(k).name;
+        s(k).line = stackArr(k).line;
+    end
+end
+end
+
+
+function c = serializeCause(causeArr)
+% Serialize an MException.cause cell array into a cell array of structs.
+%   Each struct has: identifier, message, stack, cause (recursive).
+if isempty(causeArr)
+    c = {};
+else
+    c = cell(1, numel(causeArr));
+    for k = 1:numel(causeArr)
+        s = struct();
+        s.identifier = causeArr{k}.identifier;
+        s.message = causeArr{k}.message;
+        s.stack = serializeStack(causeArr{k}.stack);
+        s.cause = serializeCause(causeArr{k}.cause);
+        c{k} = s;
+    end
 end
 end
 

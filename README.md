@@ -26,7 +26,10 @@ schema and restore caller path/CWD.
 | SPM (r6313 fallback) | NIfTI I/O and processing | `config/defaults.m` → `spm_root` |
 | dicom2nifti_standalone v1.2.0 | Input conversion (all types) | `config/defaults.m` → `d2n_root` |
 
-The deployer must edit `config/defaults.m` and verify both roots exist.
+The deployer must edit `config/defaults.m`. The `d2n_root` must always exist;
+the fallback `spm_root` is required only when no complete caller-owned core-5
+SPM authority is available on the MATLAB path (caller core-5 present →
+fallback `spm_root` not required).
 
 ### Configuration Boundary
 
@@ -223,7 +226,7 @@ a live display.
 
 | Error identifier | Trigger |
 |-------|---------|
-| `alias:SpmRootMissing` | `spm_root` empty or directory nonexistent |
+| `alias:SpmRootMissing` | Fallback `spm_root` empty or directory nonexistent (emitted only when no complete caller SPM is present; not when caller SPM is complete) |
 | `alias:SpmIncomplete` | Partial core-5 markers on caller path |
 | `alias:SpmShadowed` | Selected SPM markers shadowed or unresolvable |
 | `alias:D2nRootMissing` | `d2n_root` empty or directory nonexistent |
@@ -253,4 +256,4 @@ a live display.
 
 ## Version
 
-`VERSION` is `0.1.0-dev`. This is a development release. No release tag has been created.
+`VERSION` is `0.2.0`.

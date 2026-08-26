@@ -26,8 +26,11 @@ function [niiPath, cleanup, converterResult] = loadInput(inputPath, config)
 %                  alias-owned temp workspace. Always returned (never [])
 %                  so the caller can clear it on all paths.
 %     converterResult — the full structured result from the converter
-%                  (status, message, details, outputs). Empty struct if
-%                  the converter threw before returning.
+%                  (status, message, details, outputs). Always a
+%                  structured result: when the converter throws, this
+%                  is a failed result with full diagnostics (including
+%                  details.failure.stack and details.failure.cause),
+%                  never an empty struct.
 %
 %   Throws:
 %     alias:ConverterMissing    — converter not found on path
@@ -89,13 +92,38 @@ try
     converterResult = dicom2nifti.api.run(inputPath, stagedOutput, ...
         'Compression', 'none', 'Overwrite', true);
 catch ME
-    % Converter threw — preserve what we can in the result
+    % Converter threw — preserve full MException diagnostics in the result
     converterResult = struct();
     converterResult.status = 'failed';
     converterResult.message = sprintf('Converter threw: %s — %s', ...
         ME.identifier, ME.message);
     converterResult.outputs = {};
     converterResult.details = struct();
+    converterResult.details.failure = struct();
+    converterResult.details.failure.identifier = ME.identifier;
+    converterResult.details.failure.message = ME.message;
+    % Stack: preserve as struct array with file/name/line
+    if ~isempty(ME.stack)
+        st = struct('file', {}, 'name', {}, 'line', {});
+        for k = 1:numel(ME.stack)
+            st(k).file = ME.stack(k).file;
+            st(k).name = ME.stack(k).name;
+            st(k).line = ME.stack(k).line;
+        end
+        converterResult.details.failure.stack = st;
+    else
+        converterResult.details.failure.stack = struct('file',{},'name',{},'line',{});
+    end
+    % Cause: preserve as cell array of structs (recursive)
+    if ~isempty(ME.cause)
+        cc = cell(1, numel(ME.cause));
+        for k = 1:numel(ME.cause)
+            cc{k} = serializeCauseLocal(ME.cause{k});
+        end
+        converterResult.details.failure.cause = cc;
+    else
+        converterResult.details.failure.cause = {};
+    end
     % restoreCleanup fires on return, restoring caller path/CWD.
     % cleanup survives — caller controls its lifetime.
     return;
@@ -151,5 +179,33 @@ function doRestore(originalPath, originalDir)
 path(originalPath);
 if exist(originalDir, 'dir') == 7
     cd(originalDir);
+end
+end
+
+
+function s = serializeCauseLocal(ME)
+% Serialize a single MException from a cause chain into a struct.
+s = struct();
+s.identifier = ME.identifier;
+s.message = ME.message;
+if ~isempty(ME.stack)
+    st = struct('file', {}, 'name', {}, 'line', {});
+    for k = 1:numel(ME.stack)
+        st(k).file = ME.stack(k).file;
+        st(k).name = ME.stack(k).name;
+        st(k).line = ME.stack(k).line;
+    end
+    s.stack = st;
+else
+    s.stack = struct('file',{},'name',{},'line',{});
+end
+if ~isempty(ME.cause)
+    cc = cell(1, numel(ME.cause));
+    for k = 1:numel(ME.cause)
+        cc{k} = serializeCauseLocal(ME.cause{k});
+    end
+    s.cause = cc;
+else
+    s.cause = {};
 end
 end

@@ -890,6 +890,119 @@ testCase.verifyEqual(result.status, 'failed', ...
 testCase.verifyEqual(result.outputs, {});
 end
 
+function testPartialWithUsableOutputContinuesAndCommits(testCase)
+% GIVEN a converter that returns status='partial' with a usable NIfTI
+% WHEN alias.api.run is called
+% THEN it continues processing, runs the engine, commits corrected output,
+%      returns final status='partial' only after successful commit,
+%      outputs contains only the committed corrected output (never the
+%      transient converter path), details.converter preserves the upstream
+%      partial details/message, and alias-owned temp is cleaned up.
+
+d2nDir = fullfile(tempdir, 'fake_d2n_partial_with_output');
+if exist(d2nDir, 'dir') == 7, rmdir(d2nDir, 's'); end; mkdir(d2nDir);
+cD2n = onCleanup(@() rmdir(d2nDir, 's'));
+fid = fopen(fullfile(d2nDir, 'dcm2nii.m'), 'w');
+fprintf(fid, 'function dcm2nii(varargin), end\n'); fclose(fid);
+apiDir = fullfile(d2nDir, '+dicom2nifti', '+api');
+mkdir(apiDir);
+% Converter returns partial AND writes a usable uncompressed NIfTI
+fid = fopen(fullfile(apiDir, 'run.m'), 'w');
+fprintf(fid, 'function result = run(inputFile, outputFile, varargin)\n');
+fprintf(fid, 'fid = fopen(outputFile, ''w'');\n');
+fprintf(fid, 'if fid > 0, fwrite(fid, ''FAKE_NIFTI_PARTIAL'', ''char''); fclose(fid); end\n');
+fprintf(fid, 'result = struct();\n');
+fprintf(fid, 'result.status = ''partial'';\n');
+fprintf(fid, 'result.outputs = {outputFile};\n');
+fprintf(fid, 'result.message = ''Partial conversion: 2 of 3 slices recovered.'';\n');
+fprintf(fid, 'result.details = struct(''recovered_slices'', 2, ''total_slices'', 3, ''warning'', ''truncated_acquisition'');\n');
+fprintf(fid, 'end\n');
+fclose(fid);
+
+spmDir = fullfile(tempdir, 'fake_spm_partial_with_output');
+if exist(spmDir, 'dir') == 7, rmdir(spmDir, 's'); end
+mkdir(spmDir);
+cSpm = onCleanup(@() rmdir(spmDir, 's'));
+
+fid = fopen(fullfile(spmDir, 'spm_vol.m'), 'w');
+fprintf(fid, 'function V = spm_vol(fname)\n');
+fprintf(fid, 'V = struct(''fname'',fname,''dim'',[32 32 16],''dt'',[16 0],''mat'',eye(4),''n'',[1 1],''pinfo'',[1;0;0]); end');
+fclose(fid);
+
+fid = fopen(fullfile(spmDir, 'spm_read_vols.m'), 'w');
+fprintf(fid, 'function d = spm_read_vols(V)\n');
+fprintf(fid, 'd = single(ones(V.dim)); end');
+fclose(fid);
+
+fid = fopen(fullfile(spmDir, 'spm_create_vol.m'), 'w');
+fprintf(fid, 'function V = spm_create_vol(V), end');
+fclose(fid);
+
+fid = fopen(fullfile(spmDir, 'spm_write_vol.m'), 'w');
+fprintf(fid, 'function spm_write_vol(V,d)\n');
+fprintf(fid, 'fid = fopen(V.fname,''w''); fwrite(fid,d(:),''single''); fclose(fid); end');
+fclose(fid);
+
+fid = fopen(fullfile(spmDir, 'spm_type.m'), 'w');
+fprintf(fid, 'function b = spm_type(dt, req)\n');
+fprintf(fid, 'if strcmp(req,''bits''), b=32; else b=''FLOAT32-LE''; end; end');
+fclose(fid);
+
+addpath(spmDir, '-begin');
+
+defaultsPath = fullfile(testCase.TestData.ProjectRoot, 'config', 'defaults.m');
+orig = fileread(defaultsPath);
+cCfg = onCleanup(@() writeDefaults(defaultsPath, orig));
+fid = fopen(defaultsPath, 'w');
+fprintf(fid, ['function c=defaults()\nc=struct();\n' ...
+    'c.spm_root=''%s'';c.d2n_root=''%s'';' ...
+    'c.d2n_entrypoint=''dcm2nii'';c.log_level=''info'';\nend\n'], spmDir, d2nDir); fclose(fid);
+
+inpPath = fullfile(testCase.TestData.TempDir, 'partial_with_out.dcm');
+fid = fopen(inpPath, 'w'); fprintf(fid, 'fake'); fclose(fid);
+outPath = fullfile(testCase.TestData.TempDir, 'partial_with_out.nii');
+
+% Snapshot temp dirs before to verify cleanup
+beforeTempDirs = dir(fullfile(tempdir, 'alias_convert_*'));
+
+result = alias.api.run(inpPath, outPath, true, true, false);
+
+% Final status is 'partial' only after successful commit
+testCase.verifyEqual(result.status, 'partial', ...
+    'Partial with usable output must yield final status partial after commit');
+testCase.verifyEqual(result.message, 'Correction completed from partial converter output.');
+
+% outputs contains ONLY the committed corrected output — never transient path
+testCase.verifyEqual(numel(result.outputs), 1, 'Exactly one output on partial-with-commit');
+testCase.verifyTrue(contains(result.outputs{1}, 'partial_with_out.nii'), ...
+    'Output must be the committed corrected path');
+for k = 1:numel(result.outputs)
+    testCase.verifyFalse(contains(result.outputs{k}, 'alias_convert_'), ...
+        'Transient converter path must not appear in outputs');
+end
+
+% details.converter preserves the upstream partial details/message
+testCase.verifyTrue(isfield(result.details, 'converter'), ...
+    'details must contain converter result');
+testCase.verifyEqual(result.details.converter.status, 'partial');
+testCase.verifyTrue(contains(result.details.converter.message, '2 of 3 slices recovered'));
+testCase.verifyTrue(isfield(result.details.converter, 'outputs'));
+testCase.verifyTrue(isfield(result.details.converter, 'details'));
+testCase.verifyEqual(result.details.converter.details.recovered_slices, 2);
+testCase.verifyEqual(result.details.converter.details.total_slices, 3);
+testCase.verifyEqual(result.details.converter.details.warning, 'truncated_acquisition');
+
+% Engine ran: alias_correction and centering outcomes present
+testCase.verifyTrue(isfield(result.details, 'alias_correction'));
+testCase.verifyTrue(isfield(result.details, 'centering'));
+testCase.verifyTrue(isfield(result.details, 'transform'));
+
+% Alias-owned temp cleanup: no leftover alias_convert_* dirs
+afterTempDirs = dir(fullfile(tempdir, 'alias_convert_*'));
+testCase.verifyEqual(numel(afterTempDirs), numel(beforeTempDirs), ...
+    'Alias-owned temp dirs must be cleaned up after partial-with-output path');
+end
+
 function testOutputsInvariantOnlyAfterCommit(testCase)
 % GIVEN a successful API call
 % WHEN the result is returned
@@ -944,6 +1057,250 @@ testCase.verifyEqual(result.status, 'cancelled');
 afterTempDirs = dir(fullfile(tempdir, 'alias_convert_*'));
 testCase.verifyEqual(numel(afterTempDirs), numel(beforeTempDirs), ...
     'All alias_convert_* temp dirs must be cleaned up');
+end
+
+
+%% --- T009: Stack/cause structured capture for thrown failures ---
+
+function testConverterThrowPreservesStackAndCause(testCase)
+% GIVEN a converter that throws an MException with stack and cause
+% WHEN alias.api.run is called
+% THEN details.failure.stack is a non-empty struct array with file/name/line
+%   and details.failure.cause is a non-empty cell array of structs
+d2nDir = fullfile(tempdir, 'fake_d2n_t009_throw');
+if exist(d2nDir, 'dir') == 7, rmdir(d2nDir, 's'); end; mkdir(d2nDir);
+cD2n = onCleanup(@() rmdir(d2nDir, 's'));
+fid = fopen(fullfile(d2nDir, 'dcm2nii.m'), 'w');
+fprintf(fid, 'function dcm2nii(varargin), end\n'); fclose(fid);
+apiDir = fullfile(d2nDir, '+dicom2nifti', '+api');
+mkdir(apiDir);
+fid = fopen(fullfile(apiDir, 'run.m'), 'w');
+fprintf(fid, 'function result = run(inputFile, outputFile, varargin)\n');
+fprintf(fid, 'inner = MException(''inner:cause'', ''inner cause message'');\n');
+fprintf(fid, 'me = MException(''dicom2nifti:api:ConversionBoom'', ''converter exploded'');\n');
+fprintf(fid, 'me = addCause(me, inner);\n');
+fprintf(fid, 'throw(me);\n');
+fprintf(fid, 'end\n');
+fclose(fid);
+
+spmDir = fullfile(tempdir, 'fake_spm_t009_throw');
+if exist(spmDir, 'dir') == 7, rmdir(spmDir, 's'); end; mkdir(spmDir);
+cSpm = onCleanup(@() rmdir(spmDir, 's'));
+for m = {'spm_vol','spm_read_vols','spm_create_vol','spm_write_vol','spm_type'}
+    fid = fopen(fullfile(spmDir, [m{1} '.m']), 'w');
+    fprintf(fid, 'function varargout=%s(varargin),end', m{1}); fclose(fid);
+end
+addpath(spmDir, '-begin');
+
+defaultsPath = fullfile(testCase.TestData.ProjectRoot, 'config', 'defaults.m');
+orig = fileread(defaultsPath);
+cCfg = onCleanup(@() writeDefaults(defaultsPath, orig));
+fid = fopen(defaultsPath, 'w');
+fprintf(fid, ['function c=defaults()\nc=struct();\n' ...
+    'c.spm_root=''%s'';c.d2n_root=''%s'';' ...
+    'c.d2n_entrypoint=''dcm2nii'';c.log_level=''info'';\nend\n'], spmDir, d2nDir); fclose(fid);
+
+dcmPath = fullfile(testCase.TestData.TempDir, 't009_throw.dcm');
+fid = fopen(dcmPath, 'w'); fprintf(fid, 'fake'); fclose(fid);
+outPath = fullfile(testCase.TestData.TempDir, 't009_throw_out.nii');
+
+result = alias.api.run(dcmPath, outPath, true, true, false);
+
+testCase.verifyEqual(result.status, 'failed');
+testCase.verifyEqual(result.details.failure.identifier, 'alias:ConverterFailed');
+% Stack must be a non-empty struct array with file/name/line
+stk = result.details.failure.stack;
+testCase.verifyTrue(isstruct(stk), 'stack must be a struct array');
+testCase.verifyTrue(numel(stk) > 0, 'stack must be non-empty for thrown converter');
+testCase.verifyTrue(isfield(stk(1), 'file'));
+testCase.verifyTrue(isfield(stk(1), 'name'));
+testCase.verifyTrue(isfield(stk(1), 'line'));
+testCase.verifyTrue(isnumeric(stk(1).line));
+testCase.verifyTrue(~isempty(stk(1).file));
+% Cause must be a non-empty cell array of structs
+cs = result.details.failure.cause;
+testCase.verifyTrue(iscell(cs), 'cause must be a cell array');
+testCase.verifyTrue(numel(cs) > 0, 'cause must be non-empty when converter threw with cause');
+testCase.verifyTrue(isstruct(cs{1}), 'each cause entry must be a struct');
+testCase.verifyTrue(isfield(cs{1}, 'identifier'));
+testCase.verifyTrue(isfield(cs{1}, 'message'));
+testCase.verifyTrue(isfield(cs{1}, 'stack'));
+testCase.verifyTrue(isfield(cs{1}, 'cause'));
+testCase.verifyEqual(cs{1}.identifier, 'inner:cause');
+testCase.verifyTrue(contains(cs{1}.message, 'inner cause message'));
+end
+
+function testCallbackThrowPreservesStackAndCause(testCase)
+% GIVEN a preview callback that throws an MException with a cause chain
+% WHEN alias.api.run is called
+% THEN details.failure.stack is a non-empty struct array with file/name/line
+%   and details.failure.cause is a non-empty cell array of structs with
+%   identifier/message/stack
+[spmDir, d2nDir, defaultsPath, origDefaults, inputFile, outputFile] = ...
+    setupFakeEnvironment(testCase);
+cSpm = onCleanup(@() rmdir(spmDir, 's'));
+cD2n = onCleanup(@() rmdir(d2nDir, 's'));
+cCfg = onCleanup(@() writeDefaults(defaultsPath, origDefaults));
+
+opts = struct('previewFcn', @throwingPreviewCallbackWithCause);
+result = alias.api.run(inputFile, outputFile, true, true, true, opts);
+
+testCase.verifyEqual(result.status, 'failed');
+testCase.verifyEqual(result.details.failure.identifier, 'alias:PreviewCallbackFailed');
+% Stack must be a non-empty struct array with file/name/line
+stk = result.details.failure.stack;
+testCase.verifyTrue(isstruct(stk), 'stack must be a struct array');
+testCase.verifyTrue(numel(stk) > 0, 'stack must be non-empty for callback throw');
+testCase.verifyTrue(isfield(stk(1), 'file'));
+testCase.verifyTrue(isfield(stk(1), 'name'));
+testCase.verifyTrue(isfield(stk(1), 'line'));
+testCase.verifyTrue(isnumeric(stk(1).line));
+testCase.verifyTrue(~isempty(stk(1).file));
+% Cause must be a non-empty cell array of structs (callback threw with addCause)
+cs = result.details.failure.cause;
+testCase.verifyTrue(iscell(cs), 'cause must be a cell array');
+testCase.verifyTrue(numel(cs) > 0, 'cause must be non-empty when callback threw with cause');
+testCase.verifyTrue(isstruct(cs{1}), 'each cause entry must be a struct');
+testCase.verifyTrue(isfield(cs{1}, 'identifier'));
+testCase.verifyTrue(isfield(cs{1}, 'message'));
+testCase.verifyTrue(isfield(cs{1}, 'stack'));
+testCase.verifyTrue(isfield(cs{1}, 'cause'));
+testCase.verifyEqual(cs{1}.identifier, 'test:InnerCause');
+testCase.verifyTrue(contains(cs{1}.message, 'inner callback cause'));
+if exist(outputFile, 'file') == 2, delete(outputFile); end
+end
+
+function testSpmPreflightThrowPreservesStackAndCause(testCase)
+% GIVEN an SPM read that throws with a cause chain (via broken spm_vol)
+% WHEN alias.api.run is called
+% THEN details.failure.stack is a non-empty struct array with file/name/line
+%   and details.failure.cause is a non-empty cell array of structs
+
+spmDir = fullfile(tempdir, 'fake_spm_t009_spm_throw');
+if exist(spmDir, 'dir') == 7, rmdir(spmDir, 's'); end; mkdir(spmDir);
+cSpm = onCleanup(@() rmdir(spmDir, 's'));
+% Provide a broken spm_vol that throws WITH a cause chain
+fid = fopen(fullfile(spmDir, 'spm_vol.m'), 'w');
+fprintf(fid, 'function V = spm_vol(fname)\n');
+fprintf(fid, 'inner = MException(''SPM:vol:innerCause'', ''SPM internal config error'');\n');
+fprintf(fid, 'me = MException(''SPM:vol:badconfig'', ''SPM vol threw during read'');\n');
+fprintf(fid, 'me = addCause(me, inner);\n');
+fprintf(fid, 'throw(me);\n');
+fprintf(fid, 'end\n');
+fclose(fid);
+for m = {'spm_read_vols','spm_create_vol','spm_write_vol','spm_type'}
+    fid = fopen(fullfile(spmDir, [m{1} '.m']), 'w');
+    fprintf(fid, 'function varargout=%s(varargin),end', m{1}); fclose(fid);
+end
+addpath(spmDir, '-begin');
+
+d2nDir = fullfile(tempdir, 'fake_d2n_t009_spm_throw');
+if exist(d2nDir, 'dir') == 7, rmdir(d2nDir, 's'); end; mkdir(d2nDir);
+cD2n = onCleanup(@() rmdir(d2nDir, 's'));
+fid = fopen(fullfile(d2nDir, 'dcm2nii.m'), 'w');
+fprintf(fid, 'function dcm2nii(varargin), end\n'); fclose(fid);
+apiDir = fullfile(d2nDir, '+dicom2nifti', '+api');
+mkdir(apiDir);
+fid = fopen(fullfile(apiDir, 'run.m'), 'w');
+fprintf(fid, 'function result = run(inputFile, outputFile, varargin)\n');
+fprintf(fid, 'fid = fopen(outputFile, ''w'');\n');
+fprintf(fid, 'if fid > 0, fwrite(fid, ''FAKE_NIFTI'', ''char''); fclose(fid); end\n');
+fprintf(fid, 'result = struct();\n');
+fprintf(fid, 'result.status = ''success'';\n');
+fprintf(fid, 'result.outputs = {outputFile};\n');
+fprintf(fid, 'result.message = ''ok'';\n');
+fprintf(fid, 'result.details = struct();\n');
+fprintf(fid, 'end\n');
+fclose(fid);
+
+defaultsPath = fullfile(testCase.TestData.ProjectRoot, 'config', 'defaults.m');
+orig = fileread(defaultsPath);
+cCfg = onCleanup(@() writeDefaults(defaultsPath, orig));
+% Use nonexistent spm_root so preflight may fail, but caller has spm_vol
+% that throws — the spm_vol call in run.m's SPM-read section will throw.
+fid = fopen(defaultsPath, 'w');
+fprintf(fid, ['function c=defaults()\nc=struct();\n' ...
+    'c.spm_root=''/nonexistent/spm'';c.d2n_root=''%s'';' ...
+    'c.d2n_entrypoint=''dcm2nii'';c.log_level=''info'';\nend\n'], d2nDir);
+fclose(fid);
+
+inputFile = fullfile(testCase.TestData.TempDir, 't009_spm_input.nii');
+fid = fopen(inputFile, 'w'); fwrite(fid, zeros(1, 348, 'uint8')); fclose(fid);
+outputFile = fullfile(testCase.TestData.TempDir, 't009_spm_output.nii');
+
+result = alias.api.run(inputFile, outputFile, true, true, true);
+
+testCase.verifyEqual(result.status, 'failed');
+% The spm_vol stub throws — caught by the SPM-read catch block
+testCase.verifyEqual(result.details.failure.identifier, 'alias:LoadFailed');
+% Stack must be a non-empty struct array with file/name/line
+stk = result.details.failure.stack;
+testCase.verifyTrue(isstruct(stk), 'stack must be a struct array');
+testCase.verifyTrue(numel(stk) > 0, 'stack must be non-empty for SPM throw');
+testCase.verifyTrue(isfield(stk(1), 'file'));
+testCase.verifyTrue(isfield(stk(1), 'name'));
+testCase.verifyTrue(isfield(stk(1), 'line'));
+testCase.verifyTrue(isnumeric(stk(1).line));
+testCase.verifyTrue(~isempty(stk(1).file));
+% Cause must be a non-empty cell array of structs (spm_vol threw with addCause)
+cs = result.details.failure.cause;
+testCase.verifyTrue(iscell(cs), 'cause must be a cell array');
+testCase.verifyTrue(numel(cs) > 0, 'cause must be non-empty when SPM threw with cause');
+testCase.verifyTrue(isstruct(cs{1}), 'each cause entry must be a struct');
+testCase.verifyTrue(isfield(cs{1}, 'identifier'));
+testCase.verifyTrue(isfield(cs{1}, 'message'));
+testCase.verifyTrue(isfield(cs{1}, 'stack'));
+testCase.verifyEqual(cs{1}.identifier, 'SPM:vol:innerCause');
+testCase.verifyTrue(contains(cs{1}.message, 'SPM internal config error'));
+end
+
+function testConfigValidationThrowPreservesStackAndCause(testCase)
+% GIVEN a configuration that fails validation (nonexistent d2n_root)
+% WHEN alias.api.run is called
+% THEN details.failure.stack is a non-empty struct array with file/name/line
+%   and details.failure.cause is a cell array (empty for plain error throw)
+
+% Create a valid d2n directory so load won't fail, but configure a
+% nonexistent d2n_root to force alias.config.validate to throw
+% alias:D2nRootMissing.
+d2nDir = fullfile(tempdir, 'fake_d2n_t009_cfg_throw');
+if exist(d2nDir, 'dir') == 7, rmdir(d2nDir, 's'); end; mkdir(d2nDir);
+cD2n = onCleanup(@() rmdir(d2nDir, 's'));
+fid = fopen(fullfile(d2nDir, 'dcm2nii.m'), 'w');
+fprintf(fid, 'function dcm2nii(varargin), end\n'); fclose(fid);
+
+% Use a nonexistent d2n_root to trigger alias:D2nRootMissing in validate
+defaultsPath = fullfile(testCase.TestData.ProjectRoot, 'config', 'defaults.m');
+orig = fileread(defaultsPath);
+cCfg = onCleanup(@() writeDefaults(defaultsPath, orig));
+fid = fopen(defaultsPath, 'w');
+fprintf(fid, ['function c=defaults()\nc=struct();\n' ...
+    'c.spm_root='''';c.d2n_root=''/nonexistent/d2n/root'';' ...
+    'c.d2n_entrypoint=''dcm2nii'';c.log_level=''info'';\nend\n']);
+fclose(fid);
+
+inputFile = fullfile(testCase.TestData.TempDir, 't009_cfg_input.nii');
+fid = fopen(inputFile, 'w'); fwrite(fid, zeros(1, 348, 'uint8')); fclose(fid);
+outputFile = fullfile(testCase.TestData.TempDir, 't009_cfg_output.nii');
+
+result = alias.api.run(inputFile, outputFile, true, true, true);
+
+testCase.verifyEqual(result.status, 'failed');
+testCase.verifyEqual(result.details.failure.identifier, 'alias:D2nRootMissing');
+% Stack must be a non-empty struct array with file/name/line
+stk = result.details.failure.stack;
+testCase.verifyTrue(isstruct(stk), 'stack must be a struct array');
+testCase.verifyTrue(numel(stk) > 0, 'stack must be non-empty for config validation throw');
+testCase.verifyTrue(isfield(stk(1), 'file'));
+testCase.verifyTrue(isfield(stk(1), 'name'));
+testCase.verifyTrue(isfield(stk(1), 'line'));
+testCase.verifyTrue(isnumeric(stk(1).line));
+testCase.verifyTrue(~isempty(stk(1).file));
+% Cause must be a cell array (empty for plain error throw — demonstrates
+% cause handling is correct even when no addCause was used)
+cs = result.details.failure.cause;
+testCase.verifyTrue(iscell(cs), 'cause must be a cell array');
+testCase.verifyTrue(contains(result.message, 'Configuration validation failed'));
 end
 
 
@@ -1026,4 +1383,13 @@ function decision = throwingPreviewCallback(ctx)
 % Preview callback that throws — used to test callback failure handling.
 % Defined as a named function so MATLAB allows output capture.
 error('test:CallbackBoom', 'callback exploded');
+end
+
+function decision = throwingPreviewCallbackWithCause(ctx)
+% Preview callback that throws with a cause chain — used to test
+% structured stack/cause capture for callback failures.
+inner = MException('test:InnerCause', 'inner callback cause');
+me = MException('test:CallbackBoomWithCause', 'callback exploded with cause');
+me = addCause(me, inner);
+throw(me);
 end

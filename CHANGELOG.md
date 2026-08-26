@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-26
+
 ### Migration — Unified Plugin Structure
 
 Migrated `correct_aliasing` to Piano's unified plugin structure (migration step 3).
@@ -78,13 +80,14 @@ Migrated `correct_aliasing` to Piano's unified plugin structure (migration step 
 - Conditional `vers/spm_vol_nifti.m` override never shadows valid caller helper.
 
 #### Test Results
-- Full suite: **141 passed, 0 failed**.
+- Full suite: **146 passed, 0 failed** (5 new tests added for structured
+  stack/cause capture on converter, callback, SPM, and config throws, plus
+  partial-with-usable-output commit path).
 - Manual GUI display flow: **UNVERIFIED** (requires MATLAB R2019+ with Java display).
 - Live end-to-end DICOM/NIfTI conversion with real data: **UNVERIFIED** (no real
   test fixtures available in this environment).
 
 #### Not Changed
-- `VERSION` remains `0.1.0-dev` (development release; no tag created).
 - `alias.core.engine` — pure numerical processing unchanged.
 - Piano host — not modified in this standalone slice.
 - Dependency order: dicom2nifti → correct_aliasing → Piano.
