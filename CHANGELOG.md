@@ -34,6 +34,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conditional boundary and 147/147 tests (was 141); current version references
   updated to `0.3.0`.
 
+#### Fixed
+- Source immutability preserved for both routes: passthrough returns the
+  original input path without modification; conversion continues to leave the
+  source file untouched. Clearing the passthrough `onCleanup` handle does not
+  delete or alter the source file (no-op callback).
+- Path/CWD restoration verified for both routes: passthrough and conversion
+  paths both snapshot and restore caller `path` and `pwd` on every return and
+  exception path.
+- Converter failure diagnostics unchanged: converter throws still produce
+  structured `failed` results with full `details.failure.stack` and
+  `details.failure.cause`; the `converter_route` tag is set to
+  `dicom2nifti-conversion` even on failure paths.
+- `converter_route` provenance field defaults to `''` in `+alias/+result/create.m`
+  and is populated per-call by `+alias/+api/run.m` from the converter result.
+
+#### Safety Invariants Preserved
+- Source immutability: input files never modified or deleted, for both
+  passthrough and conversion routes.
+- No-op `onCleanup` for passthrough: clearing the handle does not delete the
+  source file; no `alias_convert_*` workspace is created.
+- Path/CWD restoration on all exits (success and error), for both routes.
+- Converter failure diagnostics: structured `failed` results with full stack
+  and cause unchanged from 0.2.0.
+- Committed-output-only: `result.outputs` populated only after successful
+  promotion; transient converter staging paths not exposed.
+- Overwrite refusal when `Overwrite=false` and output exists.
+- Canonical same-file guard via `alias.util.sameCanonicalPath`.
+- Rollback-safe promotion via `alias.util.safePromote`.
+- SPM authority: core-5 marker inspection with fail-closed partial rejection.
+- Conditional `vers/spm_vol_nifti.m` override never shadows valid caller helper.
+
+#### Test Results
+- Full suite: **147 passed, 0 failed** across 12 test classes (was 146 in
+  0.2.0; 141 before 0.2.0 test additions).
+- Tests verify `nifti-passthrough` vs `dicom2nifti-conversion` route
+  distinction: `testConverterBoundary` split into `testNiiPassthrough` (direct
+  path, no converter call, no `alias_convert_*` workspace, source bytes
+  unchanged after clearing cleanup) and `testNonNiiInputsUseConverter` (.nii.gz,
+  .dcm, .ima, folder all take conversion route).
+- Case-insensitive `.nii` detection: `.NII` extension also takes passthrough
+  route.
+- No `alias_convert_*` workspace created for passthrough inputs.
+- Route diagnostics propagated to `result.details.provenance.converter_route`
+  for both success and failure paths.
+- Path/CWD restoration explicitly verified for both passthrough (.nii) and
+  conversion (.dcm) routes in `testConverterBoundary`.
+- MATLAB R2019b+ compatibility preserved: no R2020+-only syntax; `onCleanup`,
+  `string`, and `struct` usage compatible with R2019b.
+
 ## [0.2.0] - 2026-08-26
 
 ### Migration — Unified Plugin Structure

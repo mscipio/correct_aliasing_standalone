@@ -103,9 +103,11 @@ converter internals are inspected or duplicated.
 - ✅ `testConfig`: defaults load, invalid roots, SPM authority, d2n root, and
   validation before processing.
 - ✅ `testEngine`: retain numerical engine tests independently of SPM/UI.
-- ✅ `testConverterBoundary`: all input types through dicom2nifti boundary,
-  cleanup ownership, no transient outputs, source preservation, converter error
-  diagnostics, path/CWD restoration, shadowing guard.
+- ✅ `testConverterBoundary`: conditional routing — existing uncompressed `.nii`
+  files use `nifti-passthrough` (no converter, no `alias_convert_*` staging,
+  no-op cleanup, synthetic result); `.nii.gz`, `.dcm`/`.ima`, and folder inputs
+  use `dicom2nifti-conversion` (converter staging/cleanup/error handling);
+  no transient outputs, source preservation, path/CWD restoration, shadowing guard.
 - ✅ Retained focused `testGui`, `testSpmPreflight`, `testSpmOverride`,
   `testCanonicalPath`, and `testSafePromote` coverage.
 - ✅ Replaced source-pattern-only GUI claims with a mix of injected behavioral
