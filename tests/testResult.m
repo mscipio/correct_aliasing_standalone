@@ -118,6 +118,9 @@ testCase.verifyTrue(isfield(d.provenance, 'spm_root'));
 testCase.verifyTrue(isfield(d.provenance, 'spm_version'));
 testCase.verifyTrue(isfield(d.provenance, 'spm_override_path'));
 testCase.verifyTrue(isfield(d.provenance, 'd2n_root'));
+testCase.verifyTrue(isfield(d.provenance, 'converter_route'));
+testCase.verifyEqual(d.provenance.converter_route, '', ...
+    'Default converter_route must be empty (set by run.m per call)');
 
 % Failure
 testCase.verifyTrue(isfield(d, 'failure'));

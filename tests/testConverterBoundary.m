@@ -1,11 +1,11 @@
 function tests = testConverterBoundary
 %TESTCONVERTERBOUNDARY Tests for the thin public-contract adapter.
-%   Verifies: all accepted input types (.nii, .nii.gz, .dcm, .ima,
-%   folder) traverse the same dicom2nifti.api.run converter route;
-%   only the dependency-produced NIfTI reaches SPM; cleanup ownership;
-%   no transient output exposure in result.outputs; source preservation;
-%   canonical equivalence; converter error diagnostics; path/CWD
-%   restoration; shadowing guard.
+%   Verifies: existing .nii files pass through directly (no converter
+%   call, no alias_convert_* workspace, source preserved); .nii.gz,
+%   DICOM, and folder inputs traverse the dicom2nifti.api.run converter
+%   route; cleanup ownership; source preservation; converter error
+%   diagnostics; path/CWD restoration for both routes; shadowing guard;
+%   route diagnostics distinguish pass-through from conversion.
 
 tests = functiontests(localfunctions);
 end
@@ -137,18 +137,87 @@ lines = lines{1};
 end
 
 
-%% --- All accepted input types take the same converter route ---
+%% --- .nii pass-through: direct path, no converter, source preserved ---
 
-function testAllInputTypesUseConverter(testCase)
-% .nii, .nii.gz, .dcm, .ima, and folder all go through dicom2nifti.api.run
-d2nDir = makeFakeD2nRoot('all_types');
+function testNiiPassthrough(testCase)
+% Existing .nii file returned directly, no converter call, no
+% alias_convert_* directory, source preserved after clearing cleanup.
+d2nDir = makeFakeD2nRoot('nii_passthrough');
+c1 = addCleanup(d2nDir);
+
+config = struct('d2n_root', d2nDir, 'd2n_entrypoint', 'dcm2nii', ...
+    'spm_root', '', 'log_level', 'info');
+
+% Create an existing .nii file
+origContent = 'fake nifti content for passthrough test';
+inpPath = fullfile(testCase.TestData.TempDir, 'passthrough_test.nii');
+fid = fopen(inpPath, 'w'); fprintf(fid, '%s', origContent); fclose(fid);
+
+% Count alias_convert_* dirs before
+beforeDirs = dir(fullfile(tempdir, 'alias_convert_*'));
+cleanupLog();
+
+bp = path; bd = pwd;
+[niiPath, cleanup, convResult] = alias.api.loadInput(inpPath, config);
+
+% 1. Direct path: niiPath == inputPath
+testCase.verifyEqual(niiPath, inpPath, ...
+    'Pass-through must return input path directly');
+
+% 2. Converter not called (log empty)
+lines = readLog();
+testCase.verifyEqual(numel(lines), 0, ...
+    'Converter must not be called for .nii pass-through');
+
+% 3. No new alias_convert_* directory
+afterDirs = dir(fullfile(tempdir, 'alias_convert_*'));
+testCase.verifyEqual(numel(afterDirs), numel(beforeDirs), ...
+    'No alias_convert_* directory created for .nii pass-through');
+
+% 4. Synthetic result with correct route
+testCase.verifyEqual(convResult.status, 'success');
+testCase.verifyEqual(convResult.details.converter_route, 'nifti-passthrough');
+testCase.verifyEqual(convResult.outputs, {inpPath});
+
+% 5. Clearing cleanup does not delete source and bytes unchanged
+clear cleanup;
+testCase.verifyTrue(exist(inpPath, 'file') == 2, ...
+    'Source must exist after clearing cleanup');
+fid = fopen(inpPath, 'r');
+afterContent = fread(fid, inf, 'uint8=>char')';
+fclose(fid);
+testCase.verifyEqual(afterContent, origContent, ...
+    'Source bytes must be unchanged after clearing cleanup');
+
+% 6. Path/CWD restored
+testCase.verifyEqual(path, bp, 'Path must be restored after pass-through');
+testCase.verifyEqual(pwd, bd, 'CWD must be restored after pass-through');
+
+% 7. Case-insensitive: .NII also passes through
+inpUpper = fullfile(testCase.TestData.TempDir, 'passthrough_test.NII');
+fid = fopen(inpUpper, 'w'); fprintf(fid, 'fake'); fclose(fid);
+[niiPath2, cleanup2, convResult2] = alias.api.loadInput(inpUpper, config);
+testCase.verifyEqual(niiPath2, inpUpper, ...
+    'Case-insensitive .NII must also pass through');
+testCase.verifyEqual(convResult2.details.converter_route, 'nifti-passthrough');
+clear cleanup2;
+if exist(inpUpper, 'file') == 2, delete(inpUpper); end
+
+cleanupLog();
+end
+
+
+%% --- Non-.nii inputs use the converter route ---
+
+function testNonNiiInputsUseConverter(testCase)
+% .nii.gz, .dcm, .ima, and folder all go through dicom2nifti.api.run
+d2nDir = makeFakeD2nRoot('non_nii_types');
 c1 = addCleanup(d2nDir);
 
 config = struct('d2n_root', d2nDir, 'd2n_entrypoint', 'dcm2nii', ...
     'spm_root', '', 'log_level', 'info');
 
 inputTypes = { ...
-    'test.nii', ...
     'test.nii.gz', ...
     'test.dcm', ...
     'test.ima', ...
@@ -172,21 +241,24 @@ for i = 1:numel(inputTypes)
         sprintf('Type %s: produced NIfTI must exist', inpName));
     testCase.verifyTrue(endsWith(niiPath, '.nii'), ...
         sprintf('Type %s: output must be .nii', inpName));
-    testCase.verifyTrue(isfield(convResult, 'status'), ...
-        sprintf('Type %s: converter result must have status', inpName));
     testCase.verifyEqual(convResult.status, 'success', ...
         sprintf('Type %s: converter must succeed', inpName));
+
+    % Converter route must be dicom2nifti-conversion
+    testCase.verifyEqual(convResult.details.converter_route, ...
+        'dicom2nifti-conversion', ...
+        sprintf('Type %s: route must be dicom2nifti-conversion', inpName));
+
+    % NIfTI path must be under alias_convert_* workspace
+    testCase.verifyTrue(contains(niiPath, 'alias_convert_'), ...
+        sprintf('Type %s: NIfTI must be in adapter temp workspace', inpName));
+
     clear cleanup;
 
-    % Verify the converter was invoked (log exists)
+    % Verify the converter was invoked
     lines = readLog();
     testCase.verifyTrue(numel(lines) > 0, ...
         sprintf('Type %s: converter must be invoked', inpName));
-
-    % Verify the input path was passed to the converter
-    hasInput = any(cellfun(@(l) contains(l, inpName), lines));
-    testCase.verifyTrue(hasInput, ...
-        sprintf('Type %s: converter must receive the input path', inpName));
 
     % Verify Compression=none was requested
     hasCompNone = any(cellfun(@(l) contains(l, 'Compression') && contains(l, 'none'), lines));
@@ -357,15 +429,25 @@ c1 = addCleanup(d2nDir);
 config = struct('d2n_root', d2nDir, 'd2n_entrypoint', 'dcm2nii', ...
     'spm_root', '', 'log_level', 'info');
 
-inpPath = fullfile(testCase.TestData.TempDir, 'restore_test.nii');
-fid = fopen(inpPath, 'w'); fprintf(fid, 'fake'); fclose(fid);
+% Pass-through route (.nii)
+inpNii = fullfile(testCase.TestData.TempDir, 'restore_test.nii');
+fid = fopen(inpNii, 'w'); fprintf(fid, 'fake'); fclose(fid);
 
 bp = path; bd = pwd;
-[niiPath, cleanup] = alias.api.loadInput(inpPath, config);
+[niiPath, cleanup] = alias.api.loadInput(inpNii, config);
 clear cleanup;
+testCase.verifyEqual(path, bp, 'Path must be restored after pass-through');
+testCase.verifyEqual(pwd, bd, 'CWD must be restored after pass-through');
 
-testCase.verifyEqual(path, bp, 'Path must be restored after adapter returns');
-testCase.verifyEqual(pwd, bd, 'CWD must be restored after adapter returns');
+% Conversion route (.dcm)
+inpDcm = fullfile(testCase.TestData.TempDir, 'restore_test.dcm');
+fid = fopen(inpDcm, 'w'); fprintf(fid, 'fake'); fclose(fid);
+
+bp = path; bd = pwd;
+[niiPath, cleanup] = alias.api.loadInput(inpDcm, config);
+clear cleanup;
+testCase.verifyEqual(path, bp, 'Path must be restored after conversion');
+testCase.verifyEqual(pwd, bd, 'CWD must be restored after conversion');
 end
 
 
@@ -405,7 +487,7 @@ config = struct('d2n_root', d2nDir, 'd2n_entrypoint', 'dcm2nii', ...
     'spm_root', '', 'log_level', 'info');
 
 cleanupLog();
-inpPath = fullfile(testCase.TestData.TempDir, 'overwrite_test.nii');
+inpPath = fullfile(testCase.TestData.TempDir, 'overwrite_test.nii.gz');
 fid = fopen(inpPath, 'w'); fprintf(fid, 'fake'); fclose(fid);
 
 [niiPath, cleanup] = alias.api.loadInput(inpPath, config);
@@ -422,18 +504,24 @@ end
 %% --- No extension dispatch in adapter source ---
 
 function testNoExtensionDispatchInAdapter(testCase)
+% Adapter uses isNiftiPassthrough for conditional routing — not the
+% obsolete isNiftiExt/isDicomExt helpers.
 adapterPath = fullfile(testCase.TestData.ProjectRoot, ...
     '+alias', '+api', 'loadInput.m');
 content = fileread(adapterPath);
 lines = strsplit(content, '\n');
+hasPassthrough = false;
 for i = 1:numel(lines)
     line = strtrim(lines{i});
     if startsWith(line, '%'), continue; end
+    if contains(line, 'isNiftiPassthrough'), hasPassthrough = true; end
     testCase.verifyFalse(contains(line, 'isNiftiExt'), ...
         'Adapter must not contain isNiftiExt');
     testCase.verifyFalse(contains(line, 'isDicomExt'), ...
         'Adapter must not contain isDicomExt');
 end
+testCase.verifyTrue(hasPassthrough, ...
+    'Adapter must contain isNiftiPassthrough for conditional routing');
 end
 
 

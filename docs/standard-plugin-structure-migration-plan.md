@@ -1,14 +1,14 @@
 # correct_aliasing Standard Plugin Structure Migration Plan
 
 correct_aliasing is migration step 3. Its current package is closest to the
-target, but the working tree is active development at `0.2.0`; migration
+target, but the working tree is active development at `0.3.0`; migration
 builds on those bytes without conflating structural alignment with release
 readiness.
 
 ## Status
 
 **Migration implemented (T001–T008 complete).** All structural changes and
-documentation reconciliation are in place. `VERSION` is `0.2.0`.
+documentation reconciliation are in place. `VERSION` is `0.3.0`.
 
 ## Objective and Prerequisite
 
@@ -42,7 +42,7 @@ In scope (all completed):
 - ✅ Return the same minimal result from GUI and explicit facade modes.
 - ✅ Align overwrite consent and normal processing outcomes across GUI and API.
 - ✅ Move config loading and validation into `+alias/+config/`.
-- ✅ Consume the stabilized dicom2nifti.api.run public structured API for all input types.
+- ✅ Consume the stabilized dicom2nifti.api.run public structured API for inputs requiring conversion; existing uncompressed `.nii` files pass through directly (no converter call, `converter_route = 'nifti-passthrough'`).
 - ✅ Add CHANGELOG and document migration status.
 - ✅ API-scoped path/CWD restoration, folder input, conditional fallback SPM root,
   preview callback validation, full converter diagnostics.
@@ -71,15 +71,19 @@ Non-goals:
 5. **Behavior alignment:** ✅ GUI overwrite refusal → `failed`; chooser cancel,
    Reject, decision-dialog Cancel → `cancelled`. Folder input supported via
    dependency without local type routing.
-6. **dicom2nifti adoption:** ✅ all input types routed through `dicom2nifti.api.run`
-   public structured API; adapter owns staging cleanup; no transient paths in outputs.
+6. **dicom2nifti adoption:** ✅ conditional boundary — existing uncompressed `.nii`
+   files pass through directly (`converter_route = 'nifti-passthrough'`, no converter
+   call, no `alias_convert_*` workspace, no-op cleanup); `.nii.gz`, DICOM, folder,
+   and other supported inputs routed through `dicom2nifti.api.run` public structured
+   API (`converter_route = 'dicom2nifti-conversion'`); adapter owns staging cleanup;
+   no transient paths in outputs.
 7. **API safety and result semantics:** ✅ API-scoped path/CWD restoration on all
    returns/exceptions; folder-or-file converter input; conditional fallback SPM
    root for complete caller authority; preview callback decision validation and
    exception-to-failed mapping; full converter diagnostics; partial-only-after-commit.
 8. **Documentation reconciliation:** ✅ CHANGELOG, README, migration plan, and
-   dependency contract updated to reflect implemented behavior. `VERSION` remains
-   `0.2.0`.
+    dependency contract updated to reflect implemented behavior. `VERSION` remains
+    `0.3.0`.
 
 ## Compatibility Strategy
 
@@ -111,7 +115,7 @@ converter internals are inspected or duplicated.
   Manual display verification (preview rendering, questdlg interaction) remains
   **UNVERIFIED** — requires MATLAB R2019+ with Java display.
 
-Full suite: **141 passed, 0 failed**.
+Full suite: **147 passed, 0 failed**.
 
 ## Definition of Done (All Met)
 
@@ -127,15 +131,18 @@ Full suite: **141 passed, 0 failed**.
 - ✅ Preview callback validation: exceptions and invalid decisions produce
   structured `failed` results.
 - ✅ README, CHANGELOG, migration plan, and dependency contract document the
-   migration accurately. `VERSION` is `0.2.0`.
+    migration accurately. `VERSION` is `0.3.0`.
 
 ## Resolved Decisions
 
 - **Status mapping:** operator Reject/Cancel/chooser cancellation → `cancelled`;
   processing/config/output refusal (including overwrite refusal) → `failed`.
   No public `rejected` status.
-- **dicom2nifti integration:** all input types routed through `dicom2nifti.api.run`
-  public structured API; adapter owns staging cleanup; no transient paths exposed.
+- **dicom2nifti integration:** conditional boundary — existing uncompressed `.nii`
+  files pass through directly (`converter_route = 'nifti-passthrough'`); `.nii.gz`,
+  DICOM, folder, and other supported inputs routed through `dicom2nifti.api.run`
+  public structured API (`converter_route = 'dicom2nifti-conversion'`); adapter
+  owns staging cleanup; no transient paths exposed.
 - **API safety:** API-scoped path/CWD restoration on every return and exception;
   folder-or-file converter input; conditional fallback SPM root for complete
   caller core-5 authority; preview callback decision validation and
@@ -149,7 +156,7 @@ Full suite: **141 passed, 0 failed**.
 - Existing expected failures mostly return results while unexpected engine
   failures may throw; the boundary distinguishes normal processing from
   broken internal invariants.
-- The repository is at `0.2.0`.
+- The repository is at `0.3.0`.
 
 ## Relevant Files and Symbols
 

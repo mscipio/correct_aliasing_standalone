@@ -5,9 +5,12 @@ function result = run(inputPath, outputPath, doAlias, doCenter, doOverwrite, opt
 %
 %   This function never creates UI. The source file is never modified.
 %
-%   Every accepted input type (file or directory) is passed through the
-%   verified public dicom2nifti contract (dicom2nifti.api.run) via
-%   alias.api.loadInput. SPM reads only the dependency-produced NIfTI.
+%   Accepted inputs are routed through alias.api.loadInput:
+%     * Existing uncompressed .nii files use a pass-through path
+%       (no conversion; the source file is never modified or deleted).
+%     * All other accepted inputs go through the verified public
+%       dicom2nifti contract (dicom2nifti.api.run).
+%   SPM reads only the resulting NIfTI (pass-through or staged).
 %
 %   This function snapshots and restores the full MATLAB path and CWD on
 %   every return and exception path, including direct calls (not only
@@ -142,6 +145,12 @@ end
 % Preserve full converter diagnostics under details (transient path never in outputs)
 result.details.converter_processing_path = niiPath;
 result.details.converter = converterResult;
+
+% Propagate the explicit route marker into provenance diagnostics
+if isfield(converterResult, 'details') && isstruct(converterResult.details) && ...
+   isfield(converterResult.details, 'converter_route')
+    result.details.provenance.converter_route = converterResult.details.converter_route;
+end
 
 % Handle converter failed/cancelled — no output to process
 if isfield(converterResult, 'status') && ...

@@ -283,6 +283,9 @@ testCase.verifyTrue(isfield(result.details.provenance, 'spm_authority'));
 testCase.verifyTrue(isfield(result.details.provenance, 'spm_root'));
 testCase.verifyTrue(isfield(result.details.provenance, 'spm_version'));
 testCase.verifyTrue(isfield(result.details.provenance, 'd2n_root'));
+% Route diagnostic: .nii input takes pass-through route
+testCase.verifyEqual(result.details.provenance.converter_route, ...
+    'nifti-passthrough');
 
 % Details: failure (empty on success)
 testCase.verifyClass(result.details.failure, 'struct');
@@ -377,6 +380,9 @@ testCase.verifyTrue(contains(result.details.failure.message, 'dicom2nifti:api:Co
 testCase.verifyTrue(contains(result.details.failure.message, 'converter exploded'));
 % outputs must be empty on failure
 testCase.verifyEqual(result.outputs, {});
+% Route diagnostic: .dcm input takes conversion route even on failure
+testCase.verifyEqual(result.details.provenance.converter_route, ...
+    'dicom2nifti-conversion');
 end
 
 %% --- Preview/decision seam tests ---
@@ -675,6 +681,9 @@ result = alias.api.run(folderInput, outputFile, true, true, true);
 testCase.verifyEqual(result.status, 'success');
 testCase.verifyTrue(contains(result.details.input_path, 'dicom_folder_input'));
 testCase.verifyTrue(exist(outputFile, 'file') == 2, 'Output must be written for folder input');
+% Route diagnostic: folder input takes conversion route
+testCase.verifyEqual(result.details.provenance.converter_route, ...
+    'dicom2nifti-conversion');
 if exist(outputFile, 'file') == 2, delete(outputFile); end
 end
 
@@ -762,6 +771,9 @@ testCase.verifyTrue(isfield(result.details.converter, 'message'), ...
     'converter result must have message');
 testCase.verifyTrue(isfield(result.details.converter, 'outputs'), ...
     'converter result must have outputs');
+% Route diagnostic: .nii input via setupFakeEnvironment takes pass-through
+testCase.verifyEqual(result.details.provenance.converter_route, ...
+    'nifti-passthrough');
 % Transient converter path in details only, not in public outputs
 for k = 1:numel(result.outputs)
     testCase.verifyFalse(contains(result.outputs{k}, 'alias_convert_'), ...
@@ -822,6 +834,9 @@ testCase.verifyTrue(isfield(result.details, 'converter'));
 testCase.verifyEqual(result.details.converter.status, 'failed');
 testCase.verifyTrue(contains(result.details.converter.message, 'bad input format'));
 testCase.verifyEqual(result.outputs, {});
+% Route diagnostic: .dcm input takes conversion route
+testCase.verifyEqual(result.details.provenance.converter_route, ...
+    'dicom2nifti-conversion');
 end
 
 function testFailureMetadataIncludesStackAndCause(testCase)

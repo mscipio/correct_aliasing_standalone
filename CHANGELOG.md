@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-27
+
+### Conditional .nii Pass-Through and Provenance Routing
+
+#### Added
+- **Conditional .nii pass-through** in `+alias/+api/loadInput.m`: existing
+  uncompressed `.nii` files are used directly without invoking
+  `dicom2nifti.api.run`, without creating an `alias_convert_*` workspace, and
+  with a no-op `onCleanup` handle. Detection is case-insensitive exact `.nii`
+  extension; `.nii.gz`, directories, and substring matches are excluded.
+  `isNiftiPassthrough` helper encapsulates the detection. The synthetic result
+  carries `converter_route = 'nifti-passthrough'`.
+- **Provenance `converter_route` field** in `+alias/+result/create.m` and
+  propagation in `+alias/+api/run.m`: records whether the input took the
+  `nifti-passthrough` or `dicom2nifti-conversion` route, surfaced under
+  `result.details.provenance.converter_route`.
+
+#### Changed
+- `+alias/+api/run.m` now consumes both routes (passthrough and conversion),
+  preserves `converter_processing_path`, propagates provenance, and clears both
+  cleanup types on exit.
+- `README.md` and `docs/dicom2nifti-public-contract.md` boundary documentation
+  updated to reflect conditional routing.
+- `docs/standard-plugin-structure-migration-plan.md` updated to reflect
+  conditional boundary and 147/147 tests (was 141); current version references
+  updated to `0.3.0`.
+
 ## [0.2.0] - 2026-08-26
 
 ### Migration — Unified Plugin Structure

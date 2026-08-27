@@ -110,6 +110,13 @@ function result = run(inputFile, outputFile, varargin)
 - Non-NIfTI → reads DICOM tags (`Modality`); routes MR/CT → `dicom`, PT → `pet`;
   other modalities throw `dicom2nifti:api:UnsupportedModality`.
 
+**correct_aliasing conditional boundary**: The `correct_aliasing` adapter
+(`+alias/+api/loadInput.m`) applies a conditional boundary. Existing uncompressed
+`.nii` files bypass `dicom2nifti.api.run` entirely (direct read-only pass-through,
+no converter call, no `alias_convert_*` workspace, no-op cleanup). Only `.nii.gz`,
+DICOM, folder, and other supported inputs are routed through the dependency's
+conversion workflows described in the table above. See Section 8 for details.
+
 ---
 
 ## 4. Output and Compression
@@ -168,8 +175,30 @@ This is the form correct_aliasing needs for processing.
 
 ## 8. correct_aliasing Integration Points
 
-The current `+alias/+api/loadInput.m` adapter invokes the structured public API
-directly for every accepted input type (file or directory):
+The `+alias/+api/loadInput.m` adapter applies a **conditional boundary** based
+on input type. The public API `dicom2nifti.api.run` is invoked only for inputs
+that require conversion; existing uncompressed `.nii` files bypass the converter
+entirely.
+
+### 8a. Route decision
+
+| Input | `converter_route` | Converter call | Staging workspace | Cleanup |
+|-------|-------------------|----------------|-------------------|---------|
+| Existing `.nii` file (case-insensitive extension) | `'nifti-passthrough'` | None | None | No-op |
+| `.nii.gz`, `.dcm`, `.ima`, folder, other supported | `'dicom2nifti-conversion'` | `dicom2nifti.api.run` | `tempdir/alias_convert_<token>/converted.nii` | alias-owned `rmdir` via `onCleanup` |
+
+### 8b. Pass-through path (`.nii` only)
+
+- Validates existence of the input file (minimal existence check).
+- SPM read (`spm_vol`/`spm_read_vols`) is deferred to the orchestration layer
+  (`alias.api.run`); the adapter does not read the volume.
+- Returns a synthetic result with `converter_route = 'nifti-passthrough'`, no
+  `alias_convert_*` workspace, and a no-op cleanup handle.
+- No dependency-owned artifacts are created or deleted.
+
+### 8c. Conversion path (`.nii.gz`, DICOM, folder, other)
+
+The adapter invokes the structured public API:
 
 ```matlab
 converterResult = dicom2nifti.api.run(inputPath, stagedOutput, ...
@@ -187,9 +216,23 @@ where `stagedOutput` is an alias-owned temporary path
 - Preserves the full structured converter result (status, message, details,
   outputs) under `result.details.converter` for diagnostics.
 
+### 8d. Provenance
+
+The `converter_route` value (`'nifti-passthrough'` or `'dicom2nifti-conversion'`)
+is propagated into `result.details.provenance.converter_route` by `alias.api.run`
+and recorded in the `+alias/+result/create.m` provenance template.
+
+### 8e. Public API and compatibility
+
+The conditional boundary does not change the public API surface. The four-field
+result schema, MATLAB R2019+ compatibility, source immutability, and path/CWD
+restoration invariants are preserved for both routes. PseudoCT remains explicitly
+out of scope.
+
 The legacy `dcm2nii` facade is still verified to resolve under `d2n_root` as a
 configuration invariant (shadowing guard), but is not the adapter's conversion
-path. The structured API's four-field result is the sole integration contract.
+path. The structured API's four-field result is the sole integration contract
+for the conversion route.
 
 ---
 
@@ -248,10 +291,17 @@ All correct_aliasing tests pass before any migration changes:
 
 **PASS** — The live stabilized public structured API `dicom2nifti.api.run` is
 documented, executable, and accepts every required source type (`.nii`,
-`.nii.gz`, `.dcm`, `.ima`, folder). The dependency produces a NIfTI output that
-correct_aliasing can read via SPM under the documented lifecycle. The four-field
-result struct, compression control, overwrite semantics, path/CWD restoration,
-and staging cleanup are all verified from source. The legacy `dcm2nii` facade
-remains available and verified but the adapter uses the structured API directly.
+`.nii.gz`, `.dcm`, `.ima`, folder). The `correct_aliasing` adapter applies a
+conditional boundary: existing uncompressed `.nii` files pass through read-only
+with no converter call (`converter_route = 'nifti-passthrough'`, no-op cleanup),
+while `.nii.gz`, DICOM, and folder inputs retain the existing converter staging,
+cleanup, and error behavior (`converter_route = 'dicom2nifti-conversion'`). The
+dependency produces a NIfTI output that correct_aliasing can read via SPM under
+the documented lifecycle. The four-field result struct, compression control,
+overwrite semantics, path/CWD restoration, and staging cleanup are all verified
+from source. The legacy `dcm2nii` facade remains available and verified but the
+adapter uses the structured API directly for the conversion route. The public
+API surface, MATLAB R2019+ compatibility, and source immutability are unchanged.
+PseudoCT remains explicitly out of scope.
 
 The migration may proceed to T002.

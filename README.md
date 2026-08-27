@@ -2,8 +2,11 @@
 
 Standalone MATLAB R2019+ application for MR alias correction and centering.
 Uses SPM for NIfTI I/O with caller-owned authority and the `dicom2nifti_standalone`
-v1.2.0 public structured API (`dicom2nifti.api.run`) as the sole input I/O boundary
-for all supported source types. Not a wrapper around pseudoCT or legacy Aether.
+v1.2.0 public structured API (`dicom2nifti.api.run`) as a conditional input I/O
+boundary: existing uncompressed `.nii` files pass through read-only with no
+converter call, while `.nii.gz`, DICOM, and folder inputs retain the existing
+converter staging, cleanup, and error behavior. Not a wrapper around pseudoCT
+or legacy Aether.
 
 ## Architecture
 
@@ -24,7 +27,7 @@ schema and restore caller path/CWD.
 | Dependency | Role | Configured Root |
 |---|---|---|
 | SPM (r6313 fallback) | NIfTI I/O and processing | `config/defaults.m` → `spm_root` |
-| dicom2nifti_standalone v1.2.0 | Input conversion (all types) | `config/defaults.m` → `d2n_root` |
+| dicom2nifti_standalone v1.2.0 | Input conversion (conditional; see dicom2nifti Boundary) | `config/defaults.m` → `d2n_root` |
 
 The deployer must edit `config/defaults.m`. The `d2n_root` must always exist;
 the fallback `spm_root` is required only when no complete caller-owned core-5
@@ -63,13 +66,24 @@ compatibility shim with documented provenance. It **never**:
 
 ### dicom2nifti Boundary
 
-All accepted input types (`.nii`, `.nii.gz`, `.dcm`, `.ima`, folder) are routed
-through the `dicom2nifti.api.run` public structured API. The adapter
-(`alias.api.loadInput`):
+The adapter (`alias.api.loadInput`) applies a conditional boundary based on
+input type:
+
+- **Existing uncompressed `.nii` file** (case-insensitive `.nii` extension):
+  direct read-only pass-through. No `dicom2nifti.api.run` call, no
+  `alias_convert_*` staging workspace, no converter cleanup. The file is read
+  in place via SPM (existence validated; SPM read deferred to orchestration).
+  `converter_route` is `'nifti-passthrough'`. Cleanup is a no-op.
+- **`.nii.gz`, DICOM (`.dcm`, `.ima`), folder, and other supported inputs**:
+  routed through `dicom2nifti.api.run` with the existing converter staging,
+  cleanup, and error behavior preserved. `converter_route` is
+  `'dicom2nifti-conversion'`.
+
+For the conversion path, the adapter:
 
 - Invokes `dicom2nifti.api.run(inputPath, stagedOutput, 'Compression', 'none', 'Overwrite', true)`
 - Consumes only the dependency-produced uncompressed NIfTI output
-- Keeps an alias-owned staging workspace alive through SPM reading
+- Keeps an alias-owned staging workspace (`tempdir/alias_convert_<token>/converted.nii`) alive through SPM reading
 - Cleans the staging workspace via `onCleanup` when processing completes
 - Does not delete dependency-owned artifacts
 - Does not expose transient converter paths through `result.outputs`
@@ -150,11 +164,12 @@ Every public result is a scalar struct with exactly four top-level fields:
 
 ## Input Types
 
-All input types are routed through `dicom2nifti.api.run`:
+Input routing is conditional on the source type:
 
-- **NIfTI**: `.nii`, `.nii.gz` — converted to uncompressed `.nii` for processing
-- **DICOM**: `.dcm`, `.DCM`, `.ima`, `.IMA` — converted via dicom2nifti
-- **Folder** — series collection via dicom2nifti
+- **Existing uncompressed `.nii`** — direct read-only pass-through; no converter call, no staging workspace, no-op cleanup. `converter_route` = `'nifti-passthrough'`.
+- **`.nii.gz`** — converted to uncompressed `.nii` via `dicom2nifti.api.run`; `converter_route` = `'dicom2nifti-conversion'`.
+- **DICOM**: `.dcm`, `.DCM`, `.ima`, `.IMA` — converted via `dicom2nifti.api.run`; `converter_route` = `'dicom2nifti-conversion'`.
+- **Folder** — series collection via `dicom2nifti.api.run`; `converter_route` = `'dicom2nifti-conversion'`.
 
 See `docs/dicom2nifti-public-contract.md` for the full verified input contract.
 
@@ -197,7 +212,7 @@ Tests cover:
 - **testApi**: explicit no-UI behavior, overwrite refusal/approval, source preservation, status mapping, outputs, converter boundary integration, preview/decision seam (callback accept/reject/cancel/exception/invalid decision), path/CWD restoration, folder input
 - **testConfig**: defaults load, invalid roots, SPM authority, d2n root, fixed facade identity, validation before processing
 - **testEngine**: core numerical engine (alias detection, centering, identity pass-through)
-- **testConverterBoundary**: all input types through dicom2nifti boundary, cleanup ownership, no transient outputs, source preservation, converter error diagnostics, path/CWD restoration, shadowing guard
+- **testConverterBoundary**: conditional input routing (`.nii` pass-through vs converter path), cleanup ownership, no transient outputs, source preservation, converter error diagnostics, path/CWD restoration, shadowing guard
 - **testCanonicalPath**: symlink-equivalent paths, different files, slash normalization
 - **testSafePromote**: rollback-safe output promotion (backup/restore)
 - **testGui**: GUI delegation to API, no direct calls, preview/decision callback (accept/reject/cancel/exception/invalid), overwrite authorization vs refusal, folder input delegation, result schema, cancellation behavior
@@ -256,4 +271,4 @@ a live display.
 
 ## Version
 
-`VERSION` is `0.2.0`.
+`VERSION` is `0.3.0`.

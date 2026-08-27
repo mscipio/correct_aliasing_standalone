@@ -1,36 +1,47 @@
 function [niiPath, cleanup, converterResult] = loadInput(inputPath, config)
-%LOADINPUT Convert any accepted input to an SPM-readable NIfTI via the
-%   verified public dicom2nifti contract.
+%LOADINPUT Convert any accepted input to an SPM-readable NIfTI.
 %   [niiPath, cleanup, converterResult] = alias.api.loadInput(inputPath, config)
 %
-%   Sends every input (.nii, .nii.gz, .dcm, .ima, folder, and any other
-%   type the dependency accepts) through the structured public API
-%   dicom2nifti.api.run, requesting uncompressed .nii output suitable
-%   for SPM processing.
+%   Conditional routing:
+%     * If inputPath is an existing file whose final extension is exactly
+%       '.nii' (case-insensitive), the adapter takes a pass-through path:
+%       no alias_convert_* workspace is created, no converter is invoked,
+%       and niiPath is the original inputPath. The source file is never
+%       modified or deleted.
+%     * Every other accepted input (.nii.gz, .dcm, .ima, folder, etc.) is
+%       sent through the structured public API dicom2nifti.api.run,
+%       requesting uncompressed .nii output suitable for SPM processing.
 %
-%   The adapter owns a temporary workspace that stays alive through the
-%   caller's SPM read and is cleaned via the returned onCleanup handle.
-%   Dependency-owned staging artifacts are never deleted by the adapter.
+%   The adapter owns a temporary workspace (conversion path only) that
+%   stays alive through the caller's SPM read and is cleaned via the
+%   returned onCleanup handle. Dependency-owned staging artifacts are
+%   never deleted by the adapter.
 %
 %   Input:
 %     inputPath  — absolute path to any accepted input source (file or dir)
 %     config     — validated config struct with .d2n_root, .d2n_entrypoint
 %
 %   Output:
-%     niiPath    — absolute path to the dependency-produced uncompressed
-%                  .nii file (alias-owned temp location), or '' if the
-%                  converter returned failed/cancelled/partial without
-%                  producing output.
+%     niiPath    — absolute path to an uncompressed .nii file. For the
+%                  pass-through branch this is inputPath itself; for the
+%                  conversion branch this is the dependency-produced file
+%                  in an alias-owned temp location, or '' if the converter
+%                  returned failed/cancelled/partial without output.
 %     cleanup    — onCleanup handle; keep alive through SPM read, then
 %                  let it go out of scope (or clear) to clean the
-%                  alias-owned temp workspace. Always returned (never [])
-%                  so the caller can clear it on all paths.
+%                  alias-owned temp workspace (conversion path) or to
+%                  satisfy the nonempty-handle invariant (pass-through).
+%                  Always returned (never []) so the caller can clear it
+%                  on all paths.
 %     converterResult — the full structured result from the converter
 %                  (status, message, details, outputs). Always a
 %                  structured result: when the converter throws, this
 %                  is a failed result with full diagnostics (including
 %                  details.failure.stack and details.failure.cause),
-%                  never an empty struct.
+%                  never an empty struct. The details struct carries a
+%                  converter_route tag: 'nifti-passthrough' for the
+%                  pass-through branch, 'dicom2nifti-conversion' for the
+%                  conversion branch.
 %
 %   Throws:
 %     alias:ConverterMissing    — converter not found on path
@@ -39,6 +50,27 @@ function [niiPath, cleanup, converterResult] = loadInput(inputPath, config)
 % Initialize outputs so they are always defined
 niiPath = '';
 converterResult = struct();
+
+% -------------------------------------------------------------------------
+% 0. Pass-through: existing uncompressed .nii file used directly
+%    Detect BEFORE any alias_convert_* mkdir, addpath, or converter call.
+%    Match is case-insensitive and requires the final extension to be
+%    exactly '.nii' — '.nii.gz', directories, substring matches, and
+%    missing files must NOT take this branch.
+% -------------------------------------------------------------------------
+if isNiftiPassthrough(inputPath)
+    niiPath = inputPath;
+    converterResult = struct();
+    converterResult.status  = 'success';
+    converterResult.outputs = {inputPath};
+    converterResult.message = 'NIfTI pass-through: existing uncompressed .nii used directly without conversion';
+    converterResult.details = struct();
+    converterResult.details.converter_route = 'nifti-passthrough';
+    converterResult.details.input_path      = inputPath;
+    % Nonempty no-op cleanup: does not delete or modify the source.
+    cleanup = onCleanup(@() noopCleanup());
+    return;
+end
 
 % -------------------------------------------------------------------------
 % 1. Create alias-owned temporary workspace for the converter output
@@ -124,10 +156,17 @@ catch ME
     else
         converterResult.details.failure.cause = {};
     end
+    converterResult.details.converter_route = 'dicom2nifti-conversion';
     % restoreCleanup fires on return, restoring caller path/CWD.
     % cleanup survives — caller controls its lifetime.
     return;
 end
+
+% Tag the conversion route for non-pass-through inputs
+if ~isfield(converterResult, 'details') || ~isstruct(converterResult.details)
+    converterResult.details = struct();
+end
+converterResult.details.converter_route = 'dicom2nifti-conversion';
 
 % -------------------------------------------------------------------------
 % 5. Validate the structured result
@@ -208,4 +247,31 @@ if ~isempty(ME.cause)
 else
     s.cause = {};
 end
+end
+
+
+function tf = isNiftiPassthrough(p)
+%ISNIFTIPASSTHROUGH True when p is an existing file with final extension
+%   exactly '.nii' (case-insensitive). Returns false for directories,
+%   missing files, '.nii.gz', and any path whose final extension is not
+%   '.nii'.
+tf = false;
+if ~ischar(p) || isempty(p)
+    return;
+end
+if exist(p, 'file') ~= 2
+    return;
+end
+[~, ~, ext] = fileparts(p);
+if isempty(ext)
+    return;
+end
+tf = strcmpi(ext, '.nii');
+end
+
+
+function noopCleanup()
+%NOOPCLEANUP Intentionally empty — used as the callback for the
+%   pass-through onCleanup handle so the handle is nonempty but clearing
+%   it does not delete or modify the source file.
 end
