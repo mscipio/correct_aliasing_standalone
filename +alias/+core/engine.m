@@ -106,7 +106,11 @@ p2 = affIn \ [0; 100; 0; 1];
 dd = p2(cor) - p1(cor);
 if dd > 0
     flipNb = 1;
-    volOut = flip(volOut, cor);
+    if verLessThan('matlab', '8.2')  % Before R2013b
+        volOut = flipdim(volOut, cor);
+    else % R2013b and newer
+        volOut = flip(volOut, cor);
+    end
 end
 
 % Find cut plane using zero-edge method or gradient-based fallback

@@ -27,9 +27,9 @@ end
 p = inputParser;
 p.addRequired('inputPath', @ischar);
 p.addRequired('outputPath', @ischar);
-p.addParameter('AliasCorrection', true, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
-p.addParameter('Centering', true, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
-p.addParameter('Overwrite', false, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+p.addParamValue('AliasCorrection', true, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+p.addParamValue('Centering', true, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+p.addParamValue('Overwrite', false, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
 
 try
     p.parse(varargin{:});

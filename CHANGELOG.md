@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
+### Fixed
+- MATLAB R2010b compatibility: use `inputParser.addParamValue`, select
+  `flipdim` before MATLAB 8.2 and `flip` for MATLAB 8.2 and newer, and check
+  figure graphics handles with `ishandle`.
+
+### Documentation
+- MATLAB R2010b (7.11) validated for the documented workflows. This bounded
+  claim covers the documented CLI and GUI behavior after the compatibility
+  fixes above; it does not claim app-wide compatibility or revalidation of the
+  full suite, converter, or dependency compatibility. Historical test reports
+  below are unchanged.
+
 ## [0.3.0] - 2026-08-27
 
 ### Conditional .nii Pass-Through and Provenance Routing

@@ -225,9 +225,11 @@ and recorded in the `+alias/+result/create.m` provenance template.
 ### 8e. Public API and compatibility
 
 The conditional boundary does not change the public API surface. The four-field
-result schema, MATLAB R2019+ compatibility, source immutability, and path/CWD
-restoration invariants are preserved for both routes. PseudoCT remains explicitly
-out of scope.
+result schema, source immutability, and path/CWD restoration invariants are
+preserved for both routes. MATLAB R2010b (7.11) validated for the documented
+correct_aliasing workflows is a bounded application-level statement; the
+R2010b evidence does not revalidate this dependency or converter compatibility.
+PseudoCT remains explicitly out of scope.
 
 The legacy `dcm2nii` facade is still verified to resolve under `d2n_root` as a
 configuration invariant (shadowing guard), but is not the adapter's conversion
@@ -301,7 +303,9 @@ the documented lifecycle. The four-field result struct, compression control,
 overwrite semantics, path/CWD restoration, and staging cleanup are all verified
 from source. The legacy `dcm2nii` facade remains available and verified but the
 adapter uses the structured API directly for the conversion route. The public
-API surface, MATLAB R2019+ compatibility, and source immutability are unchanged.
+API surface and source immutability are unchanged. MATLAB R2010b (7.11)
+validated for the documented workflows does not establish compatibility of the
+converter or its dependencies.
 PseudoCT remains explicitly out of scope.
 
 The migration may proceed to T002.

@@ -1,14 +1,14 @@
 # correct_aliasing Standard Plugin Structure Migration Plan
 
 correct_aliasing is migration step 3. Its current package is closest to the
-target, but the working tree is active development at `0.3.0`; migration
+target, and the released version is `0.4.0`; migration
 builds on those bytes without conflating structural alignment with release
 readiness.
 
 ## Status
 
 **Migration implemented (T001–T008 complete).** All structural changes and
-documentation reconciliation are in place. `VERSION` is `0.3.0`.
+documentation reconciliation are in place. `VERSION` is `0.4.0`.
 
 ## Objective and Prerequisite
 
@@ -83,7 +83,7 @@ Non-goals:
    exception-to-failed mapping; full converter diagnostics; partial-only-after-commit.
 8. **Documentation reconciliation:** ✅ CHANGELOG, README, migration plan, and
     dependency contract updated to reflect implemented behavior. `VERSION` remains
-    `0.3.0`.
+    `0.4.0`.
 
 ## Compatibility Strategy
 
@@ -114,8 +114,26 @@ converter internals are inspected or duplicated.
   tests (callback accept/reject/cancel/exception/invalid, overwrite refusal vs
   approval, folder delegation, cancellation, no-write, schema) and source
   inspection (no direct engine/SPM/converter/input-adapter calls from GUI).
-  Manual display verification (preview rendering, questdlg interaction) remains
-  **UNVERIFIED** — requires MATLAB R2019+ with Java display.
+   Manual display verification (preview rendering, questdlg interaction) remains
+   **UNVERIFIED in the historical migration test record** — it requires a Java
+   display. Separately, the user reports the CLI and GUI work as expected after
+   the R2010b compatibility fixes documented in README.md; this is not an
+   app-wide compatibility guarantee or a full-suite/converter revalidation.
+
+## MATLAB Compatibility Validation Note
+
+MATLAB R2010b (7.11) validated for the documented workflows. The supplied
+validation log identifies MATLAB `7.11.0.584` on `GLNXA64`. The transcript
+reports that `inputParser` accepted the supplied options and their default
+values. In the centering-only probe, `centered=true` and the reported shift was
+20 mm. The initial alias-only probe failed because `flip` was undefined in
+R2010b; after the compatibility fix, its rerun passed with
+`alias_corrected=true` and a reported translation of 40 mm. Figure
+graphics-handle checking via `ishandle` was also probed. These are specific
+transcript probe outcomes, not the user's separate later confirmation that
+both CLI and GUI work. This bounded evidence does not revalidate the full test
+suite, converter, or dependency compatibility. The full-suite result below is
+the historical migration result and is not an R2010b re-run.
 
 Full suite: **147 passed, 0 failed**.
 
@@ -133,7 +151,7 @@ Full suite: **147 passed, 0 failed**.
 - ✅ Preview callback validation: exceptions and invalid decisions produce
   structured `failed` results.
 - ✅ README, CHANGELOG, migration plan, and dependency contract document the
-    migration accurately. `VERSION` is `0.3.0`.
+    migration accurately. `VERSION` is `0.4.0`.
 
 ## Resolved Decisions
 
@@ -158,7 +176,7 @@ Full suite: **147 passed, 0 failed**.
 - Existing expected failures mostly return results while unexpected engine
   failures may throw; the boundary distinguishes normal processing from
   broken internal invariants.
-- The repository is at `0.3.0`.
+- The repository is at `0.4.0`.
 
 ## Relevant Files and Symbols
 

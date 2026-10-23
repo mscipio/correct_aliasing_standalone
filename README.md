@@ -1,6 +1,9 @@
 # Correct MR Aliasing — Standalone Application
 
-Standalone MATLAB R2019+ application for MR alias correction and centering.
+Standalone MATLAB application for MR alias correction and centering. MATLAB
+R2010b (7.11) validated for the documented workflows, not as an unrestricted
+app-wide compatibility guarantee. CLI and GUI workflows were reported to work
+as expected after the R2010b compatibility fixes described below.
 Uses SPM for NIfTI I/O with caller-owned authority and the `dicom2nifti_standalone`
 v1.2.0 public structured API (`dicom2nifti.api.run`) as a conditional input I/O
 boundary: existing uncompressed `.nii` files pass through read-only with no
@@ -94,9 +97,20 @@ for the verified dependency contract.
 
 ## Requirements
 
-- MATLAB R2019 or newer
+- MATLAB R2010b (7.11) validated for the documented workflows
 - SPM (configured in `config/defaults.m`; fallback is `spm8-r6313`)
 - dicom2nifti_standalone v1.2.0 (configured in `config/defaults.m`)
+
+The R2010b validation used MATLAB `7.11.0.584` on `GLNXA64` and covered the
+documented CLI and GUI workflows after these compatibility fixes:
+
+- Name-value parsing uses `inputParser.addParamValue` for R2010b.
+- Alias-correction array flipping uses `flipdim` before MATLAB 8.2 and `flip`
+  for MATLAB 8.2 and newer.
+- Figure graphics handles are checked with `ishandle`.
+
+This is not a claim that every application path, the full test suite, or the
+converter and its dependencies were revalidated on R2010b.
 
 ## Setup
 
@@ -220,12 +234,11 @@ Tests cover:
 - **testSpmPreflight**: core-5 caller passthrough, partial rejection, fallback selection, path/CWD restoration
 - **testSpmOverride**: vers override behavior, never shadows valid caller helper
 
-### Manual GUI Verification (MATLAB R2019+ Deployment Prerequisite)
+### Manual GUI Verification
 
 The GUI Accept/Reject/Cancel decision flow relies on MATLAB `questdlg`,
-which cannot be driven programmatically in R2019+ without Java robot
-frameworks. Before any release, a human operator must verify on at
-least one R2019+ installation:
+which cannot be driven programmatically without Java robot frameworks. For a
+manual check on an installation with a display:
 
 1. Launch `correct_aliasing()` — JFileChooser opens.
 2. Select a valid NIfTI input and a different output path.
@@ -271,4 +284,4 @@ a live display.
 
 ## Version
 
-`VERSION` is `0.3.0`.
+`VERSION` is `0.4.0`.

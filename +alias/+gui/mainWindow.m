@@ -145,7 +145,7 @@ rawDecision = questdlg( ...
     sprintf('Apply corrections and save to:\n%s', ctx.outputPath), ...
     'Accept Correction?', 'Accept', 'Reject', 'Cancel', 'Accept');
 
-if isvalid(f), close(f); end
+if ishandle(f), close(f); end
 
 switch rawDecision
     case 'Accept'
